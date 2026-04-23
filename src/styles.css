@@ -373,6 +373,7 @@ button:disabled {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
+  align-items: start;
   margin-bottom: 12px;
 }
 
@@ -383,6 +384,7 @@ button:disabled {
 .scan-control {
   display: grid;
   gap: 7px;
+  align-content: start;
   min-width: 0;
 }
 

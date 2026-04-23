@@ -1,5 +1,7 @@
-(function () {
-const AREA_OVERLAY_ID = globalThis.ChatGptChromeHelperShared?.AREA_OVERLAY_ID || 'ai-chrome-helper-area-overlay';
+/** Renders the reusable drag-to-select overlay used by text and image scans. */
+import { AREA_OVERLAY_ID } from './shared';
+import type { AreaOverlayOptions, ScanKind, SelectionCoordinates, SavedSelectionCoordinates } from './types';
+
 const OVERLAY_CLEANUP_KEY = '__aiChromeHelperCleanupAreaOverlay';
 const OVERLAY_Z_INDEX = 2147483646;
 const OVERLAY_FOREGROUND_Z_INDEX = 2147483647;
@@ -8,7 +10,26 @@ const OVERLAY_SHADOW = 'rgba(15, 23, 42, 0.22)';
 const PREVIOUS_OVERLAY_SHADOW = 'rgba(15, 23, 42, 0.12)';
 const AREA_MESSAGE_DURATION_MS = 1800;
 
-globalThis.createAreaOverlay = function createAreaOverlay(options) {
+interface AreaOverlayState {
+  options: AreaOverlayOptions;
+  overlay: HTMLDivElement | null;
+  label: HTMLDivElement | null;
+  onKeyDown: ((event: KeyboardEvent) => void) | null;
+  startX: number;
+  startY: number;
+  selecting: boolean;
+  selectionBox: HTMLDivElement | null;
+  previousBox: HTMLDivElement | null;
+  previousCoordinates: SelectionCoordinates | null;
+  cleanup: (() => void) | null;
+}
+
+interface OverlayGlobal extends Window {
+  [OVERLAY_CLEANUP_KEY]?: () => void;
+}
+
+/** Mounts a fresh overlay instance and wires mouse plus keyboard interactions. */
+export function createAreaOverlay(options: AreaOverlayOptions): void {
   cleanupExistingAreaOverlay();
 
   const state = createAreaOverlayState(options);
@@ -22,13 +43,14 @@ globalThis.createAreaOverlay = function createAreaOverlay(options) {
   state.overlay.addEventListener('mousemove', (event) => handleOverlayMouseMove(event, state));
   state.overlay.addEventListener('mouseup', (event) => handleOverlayMouseUp(event, state));
 
-  globalThis[OVERLAY_CLEANUP_KEY] = state.cleanup;
+  getOverlayWindow()[OVERLAY_CLEANUP_KEY] = state.cleanup;
   document.addEventListener('keydown', state.onKeyDown, true);
   document.documentElement.appendChild(state.overlay);
-  hydratePreviousSelection(state);
-};
+  void hydratePreviousSelection(state);
+}
 
-function createAreaOverlayState(options) {
+/** Builds the mutable state bag shared across overlay event handlers. */
+function createAreaOverlayState(options: AreaOverlayOptions): AreaOverlayState {
   return {
     options,
     overlay: null,
@@ -44,8 +66,9 @@ function createAreaOverlayState(options) {
   };
 }
 
-function cleanupExistingAreaOverlay() {
-  const existingCleanup = globalThis[OVERLAY_CLEANUP_KEY];
+/** Removes any older overlay so only one selection UI exists at a time. */
+function cleanupExistingAreaOverlay(): void {
+  const existingCleanup = getOverlayWindow()[OVERLAY_CLEANUP_KEY];
   if (typeof existingCleanup === 'function') {
     existingCleanup();
     return;
@@ -54,7 +77,8 @@ function cleanupExistingAreaOverlay() {
   document.getElementById(AREA_OVERLAY_ID)?.remove();
 }
 
-function createOverlayElement() {
+/** Creates the full-screen backdrop element that captures selection input. */
+function createOverlayElement(): HTMLDivElement {
   const overlay = document.createElement('div');
   overlay.id = AREA_OVERLAY_ID;
   overlay.style.cssText = `
@@ -67,7 +91,8 @@ function createOverlayElement() {
   return overlay;
 }
 
-function createOverlayLabel(text) {
+/** Creates the floating instruction label shown at the top of the overlay. */
+function createOverlayLabel(text: string): HTMLDivElement {
   const label = document.createElement('div');
   label.textContent = text;
   label.style.cssText = `
@@ -87,46 +112,52 @@ function createOverlayLabel(text) {
   return label;
 }
 
-function getDefaultOverlayLabel(options) {
+/** Returns the default label shown before a previous area is loaded from storage. */
+function getDefaultOverlayLabel(options: AreaOverlayOptions): string {
   return `${options.label} - Esc cancels`;
 }
 
-function getReuseOverlayLabel(options) {
+/** Returns the richer label shown when the user can reuse a previous selection. */
+function getReuseOverlayLabel(options: AreaOverlayOptions): string {
   return `${options.label} - ${getReuseShortcutLabel(options.mode)} or Enter reuses previous area, drag to replace, Esc cancels`;
 }
 
-function hydratePreviousSelection(state) {
+/** Loads the last saved area for the current scan mode and previews it if usable. */
+async function hydratePreviousSelection(state: AreaOverlayState): Promise<void> {
   const storageKey = getOverlayStorageKey(state.options.mode);
+  const result = await chrome.storage.local.get([storageKey]);
+  if (!state.overlay?.isConnected || state.selecting) {
+    return;
+  }
 
-  chrome.storage.local.get([storageKey], (result) => {
-    if (!state.overlay?.isConnected || state.selecting) {
-      return;
-    }
+  const stored = result[storageKey] as SavedSelectionCoordinates | undefined;
+  if (!isUsableCoordinates(stored, state.options)) {
+    return;
+  }
 
-    const stored = result?.[storageKey];
-    if (!isUsableCoordinates(stored, state.options)) {
-      return;
-    }
-
-    state.previousCoordinates = {
-      startX: stored.startX,
-      startY: stored.startY,
-      width: stored.width,
-      height: stored.height
-    };
+  state.previousCoordinates = {
+    startX: stored.startX,
+    startY: stored.startY,
+    width: stored.width,
+    height: stored.height
+  };
+  if (state.label) {
     state.label.textContent = getReuseOverlayLabel(state.options);
-    state.previousBox = createSelectionBox(state.options, true);
-    setBoxCoordinates(state.previousBox, state.previousCoordinates);
-    state.overlay.appendChild(state.previousBox);
-  });
+  }
+
+  state.previousBox = createSelectionBox(state.options, true);
+  setBoxCoordinates(state.previousBox, state.previousCoordinates);
+  state.overlay.appendChild(state.previousBox);
 }
 
-function getOverlayStorageKey(mode) {
+/** Maps a scan mode to the matching coordinate storage key. */
+function getOverlayStorageKey(mode: ScanKind): 'lastTextScanCoordinates' | 'lastImageScanCoordinates' {
   return mode === 'image' ? 'lastImageScanCoordinates' : 'lastTextScanCoordinates';
 }
 
-function handleOverlayMouseDown(event, state) {
-  if (event.button !== 0) {
+/** Starts a drag selection when the user presses the primary mouse button. */
+function handleOverlayMouseDown(event: MouseEvent, state: AreaOverlayState): void {
+  if (event.button !== 0 || !state.overlay) {
     return;
   }
 
@@ -142,7 +173,8 @@ function handleOverlayMouseDown(event, state) {
   updateSelectionBox(state, event.clientX, event.clientY);
 }
 
-function handleOverlayMouseMove(event, state) {
+/** Resizes the active drag selection as the cursor moves. */
+function handleOverlayMouseMove(event: MouseEvent, state: AreaOverlayState): void {
   if (!state.selecting) {
     return;
   }
@@ -150,7 +182,8 @@ function handleOverlayMouseMove(event, state) {
   updateSelectionBox(state, event.clientX, event.clientY);
 }
 
-function handleOverlayMouseUp(event, state) {
+/** Finishes the current selection and forwards valid coordinates to the background script. */
+function handleOverlayMouseUp(event: MouseEvent, state: AreaOverlayState): void {
   if (!state.selecting) {
     return;
   }
@@ -167,7 +200,8 @@ function handleOverlayMouseUp(event, state) {
   sendCoordinatesAfterCleanup(state.options.mode, coordinates);
 }
 
-function updateSelectionBox(state, currentX, currentY) {
+/** Recomputes the overlay box position and dimensions from the current pointer location. */
+function updateSelectionBox(state: AreaOverlayState, currentX: number, currentY: number): void {
   if (!state.selectionBox) {
     return;
   }
@@ -175,7 +209,8 @@ function updateSelectionBox(state, currentX, currentY) {
   setBoxCoordinates(state.selectionBox, getSelectionCoordinates(state, currentX, currentY));
 }
 
-function getSelectionCoordinates(state, currentX, currentY) {
+/** Normalizes the drag bounds so the box works in every drag direction. */
+function getSelectionCoordinates(state: AreaOverlayState, currentX: number, currentY: number): SelectionCoordinates {
   return {
     startX: Math.min(state.startX, currentX),
     startY: Math.min(state.startY, currentY),
@@ -184,7 +219,8 @@ function getSelectionCoordinates(state, currentX, currentY) {
   };
 }
 
-function handleOverlayKeyDown(event, state) {
+/** Handles keyboard shortcuts for canceling or reusing the previous selection. */
+function handleOverlayKeyDown(event: KeyboardEvent, state: AreaOverlayState): void {
   if (event.key === 'Escape') {
     cleanupAreaOverlay(state);
     return;
@@ -198,38 +234,41 @@ function handleOverlayKeyDown(event, state) {
   }
 }
 
-function cleanupAreaOverlay(state) {
+/** Unmounts the overlay and removes all registered event hooks. */
+function cleanupAreaOverlay(state: AreaOverlayState): void {
   state.overlay?.remove();
   state.selectionBox?.remove();
   state.previousBox?.remove();
   state.selectionBox = null;
   state.previousBox = null;
-  document.removeEventListener('keydown', state.onKeyDown, true);
 
-  if (globalThis[OVERLAY_CLEANUP_KEY] === state.cleanup) {
-    delete globalThis[OVERLAY_CLEANUP_KEY];
+  if (state.onKeyDown) {
+    document.removeEventListener('keydown', state.onKeyDown, true);
+  }
+
+  if (getOverlayWindow()[OVERLAY_CLEANUP_KEY] === state.cleanup) {
+    delete getOverlayWindow()[OVERLAY_CLEANUP_KEY];
   }
 }
 
-function sendCoordinatesAfterCleanup(mode, coordinates) {
-  void waitForOverlayToClear().then(() => {
-    chrome.runtime.sendMessage({
-      action: 'captureArea',
-      mode,
-      coordinates
-    });
-  });
+/** Waits for the overlay to disappear before sending capture coordinates to the background script. */
+function sendCoordinatesAfterCleanup(mode: ScanKind, coordinates: SelectionCoordinates): void {
+  void waitForOverlayToClear().then(() => chrome.runtime.sendMessage({
+    action: 'captureArea',
+    mode,
+    coordinates
+  }));
 }
 
-function waitForOverlayToClear() {
+/** Defers execution until the browser has painted away the overlay elements. */
+function waitForOverlayToClear(): Promise<void> {
   return new Promise((resolve) => {
-    requestAnimationFrame(() => {
-      requestAnimationFrame(resolve);
-    });
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
   });
 }
 
-function isReuseShortcut(event, mode) {
+/** Checks whether the pressed key matches the previous-area reuse shortcut. */
+function isReuseShortcut(event: KeyboardEvent, mode: ScanKind): boolean {
   if (event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) {
     return false;
   }
@@ -240,11 +279,13 @@ function isReuseShortcut(event, mode) {
   return event.key === shortcutLabel || event.code === digitCode || event.code === numpadCode;
 }
 
-function getReuseShortcutLabel(mode) {
+/** Returns the one-key shortcut used to reuse a saved area for a scan mode. */
+function getReuseShortcutLabel(mode: ScanKind): '1' | '2' {
   return mode === 'image' ? '2' : '1';
 }
 
-function createSelectionBox(options, isPrevious) {
+/** Creates the visible selection rectangle used for active or previous areas. */
+function createSelectionBox(options: AreaOverlayOptions, isPrevious: boolean): HTMLDivElement {
   const box = document.createElement('div');
   box.style.cssText = `
     position: fixed;
@@ -258,16 +299,21 @@ function createSelectionBox(options, isPrevious) {
   return box;
 }
 
-function setBoxCoordinates(box, coordinates) {
+/** Applies normalized coordinates to a selection box element. */
+function setBoxCoordinates(box: HTMLDivElement, coordinates: SelectionCoordinates): void {
   box.style.left = `${coordinates.startX}px`;
   box.style.top = `${coordinates.startY}px`;
   box.style.width = `${coordinates.width}px`;
   box.style.height = `${coordinates.height}px`;
 }
 
-function isUsableCoordinates(coordinates, options) {
-  return Boolean(coordinates)
-    && Number.isFinite(coordinates.startX)
+/** Validates that saved coordinates are large enough to be reused. */
+function isUsableCoordinates(coordinates: SavedSelectionCoordinates | undefined, options: AreaOverlayOptions): coordinates is SavedSelectionCoordinates {
+  if (!coordinates) {
+    return false;
+  }
+
+  return Number.isFinite(coordinates.startX)
     && Number.isFinite(coordinates.startY)
     && Number.isFinite(coordinates.width)
     && Number.isFinite(coordinates.height)
@@ -275,7 +321,8 @@ function isUsableCoordinates(coordinates, options) {
     && coordinates.height >= options.minHeight;
 }
 
-function showAreaMessage(message) {
+/** Displays a short-lived message for invalid selection attempts. */
+function showAreaMessage(message: string): void {
   const element = document.createElement('div');
   element.textContent = message;
   element.style.cssText = `
@@ -295,4 +342,8 @@ function showAreaMessage(message) {
   document.documentElement.appendChild(element);
   setTimeout(() => element.remove(), AREA_MESSAGE_DURATION_MS);
 }
-})();
+
+/** Returns the window object with the overlay cleanup hook typing applied. */
+function getOverlayWindow(): OverlayGlobal {
+  return window as OverlayGlobal;
+}

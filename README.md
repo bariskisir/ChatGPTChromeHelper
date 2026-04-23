@@ -11,11 +11,11 @@ ChatGPT Chrome Helper is a Chrome extension for working with ChatGPT directly fr
 
 ## Install
 
-0. Clone or download repository then unzip. https://github.com/bariskisir/ChatGPTChromeHelper/archive/refs/heads/master.zip
-1. Open `chrome://extensions`.
-2. Enable **Developer mode**.
-3. Click **Load unpacked**.
-4. Select src folder.
+1. Download the latest version. https://github.com/bariskisir/ChatGPTChromeHelper/releases/latest/download/dist.zip and unzip
+2. Open `chrome://extensions`.
+3. Enable **Developer mode**.
+4. Click **Load unpacked**.
+5. Select the `dist` folder.
 
 ## Login
 
@@ -36,6 +36,16 @@ You can use it with free subscription.
 ## Playground
 
 - https://www.oxfordonlineenglish.com/english-level-test/vocabulary
+
+## Development
+
+0. Clone the repository `git clone https://github.com/bariskisir/ChatGPTChromeHelper`
+1. Install dependencies with `npm install`.
+2. Run the extension with `npm run dev`.
+3. Open `chrome://extensions`.
+4. Enable **Developer mode**.
+5. Click **Load unpacked**.
+6. Select the `dist` folder.
 
 ## LICENSE
 - MIT

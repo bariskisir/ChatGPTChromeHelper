@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT Chrome Helper",
-  "description": "ChatGPT Chrome Helper is a Chrome extension for working with ChatGPT directly from your browser. It can answer selected text, scan page text with local OCR, and analyze selected image areas.",
+  "description": "ChatGPT Chrome Helper is a Chrome extension for working with ChatGPT directly from your browser. It can answer selected text, scan page text with automatic OCR, and analyze selected image areas.",
   "version": "1.0.0",
   "icons": {
     "16": "chatgpt-icon.png",
@@ -24,8 +24,17 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["shared.js", "libs/tesseract.min.js", "content.js"],
+      "js": ["content.js"],
       "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "assets/tesseract/*",
+        "assets/tesseract-core/*"
+      ],
+      "matches": ["<all_urls>"]
     }
   ],
   "permissions": [
@@ -38,7 +47,7 @@
   "host_permissions": [
     "https://auth.openai.com/*",
     "https://chatgpt.com/*",
-    "https://tessdata.projectnaptha.com/*",
+    "https://cdn.jsdelivr.net/*",
     "http://localhost:1455/*",
     "<all_urls>"
   ]

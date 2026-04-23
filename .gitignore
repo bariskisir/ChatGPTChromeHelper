@@ -5,8 +5,8 @@ Thumbs.db
 *.temp
 *.crx
 *.zip
-dist/
 build/
+dist/
 node_modules/
 .vscode/
 .idea/
