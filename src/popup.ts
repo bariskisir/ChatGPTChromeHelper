@@ -1,16 +1,24 @@
 /** Powers the extension popup UI, including auth state, scan settings, and history browsing. */
 import {
   DEFAULT_MODEL,
+  DEFAULT_THINKING_VARIANT,
+  filterAvailableModelsByKind,
+  getDefaultAvailableModel,
+  getDefaultThinkingVariantForModel,
   SCAN_KINDS,
   getNormalizedHistory,
   getNormalizedHistoryIndex,
   getScanSettings,
+  getSupportedThinkingVariants,
+  findAvailableModelForKind,
+  normalizeThinkingVariant,
   normalizeStoredModel,
   normalizeSystemPromptPreset
 } from './lib/shared';
 import { isRuntimeEventMessage, sendRuntimeMessage } from './lib/messages';
 import { setStorage } from './lib/storage';
 import type {
+  AvailableModel,
   ErrorResult,
   HistoryEntry,
   LimitInfo,
@@ -23,6 +31,7 @@ import type {
   ScanControlElements,
   ScanKind,
   StatusPayload,
+  ThinkingVariant,
   SystemPromptPreset
 } from './lib/types';
 
@@ -30,6 +39,7 @@ const EXTERNAL_LINKS = {
   developer: 'https://www.bariskisir.com',
   source: 'https://github.com/bariskisir/ChatGPTChromeHelper'
 } as const;
+const REFRESH_ICON = '\u21BB';
 
 const elements = getElements();
 const popupState: {
@@ -40,6 +50,14 @@ const popupState: {
   historyIndex: 0
 };
 const scanControls = createScanControls();
+
+interface ScanStatusValues {
+  model: ModelSelection;
+  customModel: string;
+  thinkingVariant: ThinkingVariant;
+  systemPromptPreset: SystemPromptPreset;
+  customSystemPrompt: string;
+}
 
 document.addEventListener('DOMContentLoaded', handlePopupDomReady);
 chrome.runtime.onMessage.addListener(handlePopupRuntimeMessage);
@@ -78,6 +96,8 @@ function createScanControls(): Record<ScanKind, ScanControl> {
     text: createScanControl('text', {
       button: elements.textScanButton,
       modelSelect: elements.textModelSelect,
+      thinkingSelect: elements.textThinkingSelect,
+      refreshButton: elements.textModelRefreshButton,
       customModelInput: elements.textCustomModel,
       systemPromptSelect: elements.textSystemPromptSelect,
       customSystemPromptInput: elements.textCustomSystemPrompt
@@ -85,6 +105,8 @@ function createScanControls(): Record<ScanKind, ScanControl> {
     image: createScanControl('image', {
       button: elements.imageScanButton,
       modelSelect: elements.imageModelSelect,
+      thinkingSelect: elements.imageThinkingSelect,
+      refreshButton: elements.imageModelRefreshButton,
       customModelInput: elements.imageCustomModel,
       systemPromptSelect: elements.imageSystemPromptSelect,
       customSystemPromptInput: elements.imageCustomSystemPrompt
@@ -115,13 +137,15 @@ function bindEvents(): void {
   elements.copyInputButton.addEventListener('click', handleCopyInputClick);
   elements.copyOutputButton.addEventListener('click', handleCopyOutputClick);
 
-  for (const kind of SCAN_KINDS) {
-    const controls = getScanControls(kind);
+  forEachScanControl((kind, controls) => {
     controls.button.addEventListener('click', () => {
       void triggerScan(kind);
     });
+    controls.refreshButton.addEventListener('click', () => {
+      void handleRefreshModelsClick(controls.refreshButton);
+    });
     bindScanControlEvents(kind);
-  }
+  });
 }
 
 /** Opens the developer website in a new tab. */
@@ -160,8 +184,8 @@ function bindScanControlEvents(kind: ScanKind): void {
   controls.modelSelect.addEventListener('change', () => {
     void saveModelChoice(kind);
   });
-  controls.customModelInput.addEventListener('input', () => {
-    void saveModelChoice(kind);
+  controls.thinkingSelect.addEventListener('change', () => {
+    void saveThinkingVariantChoice(kind);
   });
   controls.systemPromptSelect.addEventListener('change', () => {
     void saveSystemPromptChoice(kind);
@@ -320,25 +344,28 @@ function setHistoryInputText(text: string): void {
 
 /** Renders model and system-prompt controls from the latest status payload. */
 function renderScanControls(status: StatusPayload): void {
-  for (const kind of SCAN_KINDS) {
-    const controls = getScanControls(kind);
+  forEachScanControl((kind, controls) => {
+    renderModelOptions(controls, status.availableModels);
     const values = getScanStatusValues(kind, status);
     setModelControls(controls, values.model, values.customModel);
+    renderThinkingOptions(controls, status.availableModels, values.model, values.thinkingVariant);
     setSystemPromptControls(controls, values.systemPromptPreset, values.customSystemPrompt);
-  }
+  });
 }
 
 /** Extracts one scan mode's model and prompt values from the full status payload. */
-function getScanStatusValues(kind: ScanKind, status: StatusPayload): {
-  model: ModelSelection;
-  customModel: string;
-  systemPromptPreset: SystemPromptPreset;
-  customSystemPrompt: string;
-} {
+function getScanStatusValues(kind: ScanKind, status: StatusPayload): ScanStatusValues {
   const { settings } = getScanControls(kind);
+  const selectableModels = filterAvailableModelsByKind(status.availableModels, kind);
+  const selectedModel = normalizeStoredModel(status[settings.modelKey], status[settings.customModelKey], selectableModels);
   return {
-    model: normalizeStoredModel(status[settings.modelKey], status[settings.customModelKey]),
+    model: selectedModel,
     customModel: status[settings.customModelKey] || '',
+    thinkingVariant: normalizeThinkingVariant(
+      status[settings.thinkingVariantKey],
+      selectedModel,
+      selectableModels
+    ),
     systemPromptPreset: normalizeSystemPromptPreset(
       status[settings.systemPromptPresetKey],
       status[settings.customSystemPromptKey]
@@ -353,9 +380,11 @@ function setModelControls(
   selectedModel: ModelSelection,
   customModel: string
 ): void {
-  controls.modelSelect.value = selectedModel || DEFAULT_MODEL;
+  const optionValues = new Set(Array.from(controls.modelSelect.options).map((option) => option.value));
+  const fallbackValue = controls.modelSelect.dataset.defaultModel || DEFAULT_MODEL;
+  controls.modelSelect.value = optionValues.has(selectedModel) ? selectedModel : fallbackValue;
   controls.customModelInput.value = customModel;
-  controls.customModelInput.hidden = selectedModel !== 'other';
+  controls.customModelInput.hidden = true;
 }
 
 /** Persists the popup's current model selection for a scan mode. */
@@ -363,13 +392,92 @@ async function saveModelChoice(kind: ScanKind): Promise<void> {
   const controls = getScanControls(kind);
   const { settings } = controls;
   const selectedModel = controls.modelSelect.value as ModelSelection;
-  controls.customModelInput.hidden = selectedModel !== 'other';
+  controls.customModelInput.hidden = true;
+  controls.customModelInput.value = '';
+  const status = await sendRuntimeMessage<StatusPayload | ErrorResult>({ action: 'getStatus' });
+  if (status.ok) {
+    const selectableModels = filterAvailableModelsByKind(status.availableModels, kind);
+    const normalizedModel = normalizeStoredModel(selectedModel, '', selectableModels);
+    const defaultThinkingVariant = getDefaultThinkingVariantForModel(normalizedModel, selectableModels);
 
+    await setStorage({
+      [settings.modelKey]: normalizedModel,
+      [settings.customModelKey]: '',
+      [settings.thinkingVariantKey]: defaultThinkingVariant
+    });
+
+    renderThinkingOptions(
+      controls,
+      status.availableModels,
+      normalizedModel,
+      defaultThinkingVariant
+    );
+  }
+}
+
+/** Renders the runtime model catalog for a scan mode and preserves the Other fallback. */
+function renderModelOptions(controls: ScanControl, availableModels: AvailableModel[]): void {
+  const filteredModels = filterAvailableModelsByKind(availableModels, controls.settings.kind);
+  const defaultModel = getDefaultAvailableModel(filteredModels);
+  controls.modelSelect.dataset.defaultModel = defaultModel;
+  controls.modelSelect.replaceChildren(
+    ...filteredModels.map((model) => {
+      const option = document.createElement('option');
+      option.value = model.model;
+      option.textContent = model.model;
+      return option;
+    })
+  );
+}
+
+/** Renders the supported thinking variants for the currently selected model. */
+function renderThinkingOptions(
+  controls: ScanControl,
+  availableModels: AvailableModel[],
+  selectedModel: string,
+  selectedThinkingVariant: ThinkingVariant
+): void {
+  const filteredModels = filterAvailableModelsByKind(availableModels, controls.settings.kind);
+  const model = findAvailableModelForKind(availableModels, controls.settings.kind, selectedModel);
+  const thinkingVariants = getSupportedThinkingVariants(selectedModel, filteredModels);
+  controls.thinkingSelect.replaceChildren(
+    ...thinkingVariants.map((item) => {
+      const option = document.createElement('option');
+      option.value = item.value;
+      option.textContent = item.value;
+      option.title = item.description;
+      return option;
+    })
+  );
+  controls.thinkingSelect.value = thinkingVariants.some((item) => item.value === selectedThinkingVariant)
+    ? selectedThinkingVariant
+    : model?.defaultThinkingVariant || DEFAULT_THINKING_VARIANT;
+}
+
+/** Persists the popup's current thinking variant for a scan mode. */
+async function saveThinkingVariantChoice(kind: ScanKind): Promise<void> {
+  const controls = getScanControls(kind);
+  const { settings } = controls;
   await setStorage({
-    [settings.modelKey]: selectedModel,
-    [settings.customModelKey]: controls.customModelInput.value.trim()
+    [settings.thinkingVariantKey]: controls.thinkingSelect.value as ThinkingVariant
   });
 }
+
+/** Refreshes the remote model catalog from the popup refresh button. */
+async function handleRefreshModelsClick(button: HTMLButtonElement): Promise<void> {
+  setBusy(button, true, REFRESH_ICON);
+  try {
+    const result = await sendRuntimeMessage<Result>({ action: 'refreshModels' });
+    if (!result.ok) {
+      showError(result.error || 'Could not refresh models.');
+      return;
+    }
+    await refreshStatus();
+  } finally {
+    setBusy(button, false, REFRESH_ICON);
+  }
+}
+
 
 /** Updates the prompt preset UI and input behavior for one scan mode. */
 function setSystemPromptControls(controls: ScanControl, selectedPreset: SystemPromptPreset, customPrompt: string): void {
@@ -438,6 +546,13 @@ function setEditablePromptInput(controls: ScanControl, value: string): void {
 /** Returns the scan-control bundle for a requested mode. */
 function getScanControls(kind: ScanKind): ScanControl {
   return scanControls[kind] || scanControls.text;
+}
+
+/** Runs shared text/image control logic through one callback. */
+function forEachScanControl(callback: (kind: ScanKind, controls: ScanControl) => void): void {
+  for (const kind of SCAN_KINDS) {
+    callback(kind, getScanControls(kind));
+  }
 }
 
 /** Starts the selected scan flow from the popup. */
@@ -604,6 +719,10 @@ function getElements(): PopupElements {
     imageScanButton: getElement('imageScanButton'),
     textModelSelect: getElement('textModelSelect'),
     imageModelSelect: getElement('imageModelSelect'),
+    textThinkingSelect: getElement('textThinkingSelect'),
+    imageThinkingSelect: getElement('imageThinkingSelect'),
+    textModelRefreshButton: getElement('textModelRefreshButton'),
+    imageModelRefreshButton: getElement('imageModelRefreshButton'),
     textCustomModel: getElement('textCustomModel'),
     imageCustomModel: getElement('imageCustomModel'),
     textSystemPromptSelect: getElement('textSystemPromptSelect'),
@@ -622,3 +741,4 @@ function getElement<T extends HTMLElement>(id: string): T {
 
   return element as T;
 }
+

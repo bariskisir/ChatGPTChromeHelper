@@ -1,17 +1,19 @@
 /** Declares the shared domain types used by the popup, content, and background scripts. */
-export type KnownModel = 'gpt-5.4' | 'gpt-5.4-mini' | 'gpt-5.3-codex' | 'gpt-5.2';
-export type ModelSelection = KnownModel | 'other';
+export type KnownModel = string;
+export type ModelSelection = KnownModel;
 export type ScanKind = 'text' | 'image';
 export type HistoryEntryType = ScanKind | 'ask';
 export type PageResponseType = HistoryEntryType | 'status' | 'error';
 export type SystemPromptPreset = 'solver' | 'none' | 'other';
 export type ResponseStyle = 'low' | 'medium' | 'high';
+export type ThinkingVariant = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 export type TriggerAction = 'triggerTextScan' | 'triggerImageScan';
 export type RepeatAction = 'repeatTextScan' | 'repeatImageScan';
 export type CaptureAction = 'cropImage' | 'ocrImage';
 export type CoordinateStorageKey = 'lastTextScanCoordinates' | 'lastImageScanCoordinates';
 export type ModelStorageKey = 'textScanModel' | 'imageScanModel';
 export type CustomModelStorageKey = 'textScanCustomModel' | 'imageScanCustomModel';
+export type ThinkingVariantStorageKey = 'textScanThinkingVariant' | 'imageScanThinkingVariant';
 export type SystemPromptStorageKey = 'textSystemPromptPreset' | 'imageSystemPromptPreset';
 export type CustomSystemPromptStorageKey = 'textCustomSystemPrompt' | 'imageCustomSystemPrompt';
 
@@ -57,6 +59,24 @@ export interface LimitInfo {
   items: LimitInfoItem[];
 }
 
+export interface AvailableModel {
+  id: string;
+  model: string;
+  displayName: string;
+  description: string;
+  availableInPlans: string[];
+  hidden: boolean;
+  isDefault: boolean;
+  inputModalities: ScanKind[];
+  defaultThinkingVariant: ThinkingVariant;
+  thinkingVariants: ThinkingVariantOption[];
+}
+
+export interface ThinkingVariantOption {
+  value: ThinkingVariant;
+  description: string;
+}
+
 export interface LegacyLimitInfo {
   leftPercent: number;
   usedPercent?: number;
@@ -93,6 +113,7 @@ export interface ScanSettings {
   modelKey: ModelStorageKey;
   customModelKey: CustomModelStorageKey;
   customModelPlaceholder: string;
+  thinkingVariantKey: ThinkingVariantStorageKey;
   systemPromptPresetKey: SystemPromptStorageKey;
   customSystemPromptKey: CustomSystemPromptStorageKey;
   customSystemPromptPlaceholder: string;
@@ -129,12 +150,16 @@ export interface ExtensionStorage {
   historyIndex?: number;
   requestCount?: number;
   limitInfo?: StoredLimitInfo;
+  availableModels?: AvailableModel[];
+  codexClientVersion?: string;
   lastTextScanCoordinates?: SavedSelectionCoordinates;
   lastImageScanCoordinates?: SavedSelectionCoordinates;
   textScanModel?: ModelSelection;
   textScanCustomModel?: string;
+  textScanThinkingVariant?: ThinkingVariant;
   imageScanModel?: ModelSelection;
   imageScanCustomModel?: string;
+  imageScanThinkingVariant?: ThinkingVariant;
   textSystemPromptPreset?: SystemPromptPreset;
   textCustomSystemPrompt?: string;
   imageSystemPromptPreset?: SystemPromptPreset;
@@ -171,14 +196,18 @@ export interface StatusPayload {
   accountEmail: string;
   requestCount: number;
   limitInfo: LimitInfo | null;
+  availableModels: AvailableModel[];
+  codexClientVersion: string;
   expiresAt: number | null;
   lastResponse: string;
   history: HistoryEntry[];
   historyIndex: number;
   textScanModel: ModelSelection;
   textScanCustomModel: string;
+  textScanThinkingVariant: ThinkingVariant;
   imageScanModel: ModelSelection;
   imageScanCustomModel: string;
+  imageScanThinkingVariant: ThinkingVariant;
   textSystemPromptPreset: SystemPromptPreset;
   textCustomSystemPrompt: string;
   imageSystemPromptPreset: SystemPromptPreset;
@@ -200,6 +229,10 @@ export interface GetStatusRequest {
 
 export interface DeleteHistoryRequest {
   action: 'deleteHistory';
+}
+
+export interface RefreshModelsRequest {
+  action: 'refreshModels';
 }
 
 export interface TriggerTextScanRequest {
@@ -229,6 +262,7 @@ export type RuntimeRequest =
   | SignOutRequest
   | GetStatusRequest
   | DeleteHistoryRequest
+  | RefreshModelsRequest
   | TriggerTextScanRequest
   | TriggerImageScanRequest
   | RepeatTextScanRequest
@@ -291,6 +325,10 @@ export interface PopupElements {
   imageScanButton: HTMLButtonElement;
   textModelSelect: HTMLSelectElement;
   imageModelSelect: HTMLSelectElement;
+  textThinkingSelect: HTMLSelectElement;
+  imageThinkingSelect: HTMLSelectElement;
+  textModelRefreshButton: HTMLButtonElement;
+  imageModelRefreshButton: HTMLButtonElement;
   textCustomModel: HTMLInputElement;
   imageCustomModel: HTMLInputElement;
   textSystemPromptSelect: HTMLSelectElement;
@@ -302,6 +340,8 @@ export interface PopupElements {
 export interface ScanControlElements {
   button: HTMLButtonElement;
   modelSelect: HTMLSelectElement;
+  thinkingSelect: HTMLSelectElement;
+  refreshButton: HTMLButtonElement;
   customModelInput: HTMLInputElement;
   systemPromptSelect: HTMLSelectElement;
   customSystemPromptInput: HTMLTextAreaElement;

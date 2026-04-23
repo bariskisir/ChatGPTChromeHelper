@@ -47,6 +47,7 @@
   "host_permissions": [
     "https://auth.openai.com/*",
     "https://chatgpt.com/*",
+    "https://registry.npmjs.org/*",
     "https://cdn.jsdelivr.net/*",
     "http://localhost:1455/*",
     "<all_urls>"

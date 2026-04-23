@@ -2,6 +2,7 @@
 import { AREA_OVERLAY_ID, SCAN_KINDS, getScanSettings } from './lib/shared';
 import { isTabMessage, sendRuntimeMessage } from './lib/messages';
 import { cropImage, ocrImage } from './lib/ocr';
+import { getErrorMessage } from './lib/safe';
 import type {
   CropImagePayload,
   CropImageResult,
@@ -231,17 +232,4 @@ function isEditableTarget(target: EventTarget | null): boolean {
 
   const tag = target.tagName.toLowerCase();
   return tag === 'input' || tag === 'textarea' || tag === 'select';
-}
-
-/** Normalizes unknown errors into user-facing strings. */
-function getErrorMessage(error: unknown, fallback = 'Unknown error'): string {
-  if (error instanceof Error && error.message) {
-    return error.message;
-  }
-
-  if (typeof error === 'string' && error.trim()) {
-    return error;
-  }
-
-  return fallback;
 }

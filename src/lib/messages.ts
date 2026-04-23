@@ -19,6 +19,7 @@ export function isRuntimeRequest(value: unknown): value is RuntimeRequest {
     'signOut',
     'getStatus',
     'deleteHistory',
+    'refreshModels',
     'triggerTextScan',
     'triggerImageScan',
     'repeatTextScan',

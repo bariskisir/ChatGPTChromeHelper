@@ -1,15 +1,15 @@
 /** Coordinates authentication, capture flows, ChatGPT requests, and extension-wide state updates. */
 import {
-  DEFAULT_MODEL,
   STATUS_STORAGE_KEYS,
   STORAGE_KEYS,
-  TEXT_SOLVER_PROMPT,
   createHistoryEntry,
   getMissingSavedCoordinatesMessage,
   getNormalizedHistory,
   getNormalizedHistoryIndex,
   getScanSettings,
   isSavedCoordinatesUsable,
+  normalizeAvailableModelsCatalog,
+  normalizeThinkingVariant,
   normalizeScanKind,
   normalizeStoredModel,
   normalizeSystemPromptPreset,
@@ -18,15 +18,30 @@ import {
 } from './lib/shared';
 import { broadcastRuntimeMessage, isRuntimeRequest, sendTabMessage, type RuntimeResponse } from './lib/messages';
 import { getStorage, removeStorage, setStorage } from './lib/storage';
+import {
+  CHATGPT_REDIRECT_URI,
+  buildAuthorizationUrl,
+  callChatGpt,
+  createAccessContextFromAccessToken,
+  exchangeAuthorizationCode,
+  fetchAvailableModels,
+  fetchCodexClientVersion,
+  fetchLimitInfo,
+  getDefaultCodexClientVersion,
+  getValidAccessContext,
+  hasRenderableLimitInfo,
+  normalizeLimitInfo,
+  persistTokenResult,
+  refreshStoredLimitInfo
+} from './background/chatgptClient';
+import { base64UrlRandom, createCodeChallenge } from './background/pkce';
+import { getErrorMessage, toErrorResult, unwrapResult } from './lib/safe';
 import type {
-  AccessContext,
+  AvailableModel,
   CaptureAreaRequest,
   CropImagePayload,
-  ErrorResult,
   ExtensionStorage,
   HistoryEntry,
-  LimitInfo,
-  LimitInfoItem,
   OcrImagePayload,
   PageResponseType,
   PendingOAuth,
@@ -36,26 +51,14 @@ import type {
   ScanKind,
   SelectionCoordinates,
   StatusPayload,
-  StoredLimitInfo,
-  TokenResult
+  ThinkingVariant
 } from './lib/types';
 
-const CHATGPT_AUTH_URL = 'https://auth.openai.com/oauth/authorize';
-const CHATGPT_TOKEN_URL = 'https://auth.openai.com/oauth/token';
-const CHATGPT_RESPONSES_URL = 'https://chatgpt.com/backend-api/codex/responses';
-const CHATGPT_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage';
-const CHATGPT_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
-const CHATGPT_REDIRECT_URI = 'http://localhost:1455/auth/callback';
-const CHATGPT_SCOPE = 'openid profile email offline_access';
-const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 const HISTORY_LIMIT = 50;
 const RESPONSE_BADGE_COLOR = '#2563eb';
 const RESPONSE_BADGE_TEXT = '1';
 const RESPONSE_BADGE_DURATION_MS = 8000;
 const ASK_RESPONSE_STYLE = 'low';
-const LIMIT_REFRESH_INTERVAL = 5;
-const LIMIT_PERCENT_PRECISION = 1;
-const DEFAULT_LIMIT_ID = 'codex';
 
 const CONTEXT_MENU_ITEMS = {
   loggedOut: [
@@ -101,36 +104,6 @@ interface ScanRequestData {
   imageDataUrl: string | null;
   historyInput: string;
   historyImageDataUrl: string;
-}
-
-interface AccessTokenClaimsResponse {
-  response?: {
-    output?: unknown[];
-  };
-  output?: unknown[];
-}
-
-interface ResponseAccumulator {
-  text: string;
-  completedText: string;
-}
-
-interface ParsedSsePayload {
-  delta: string;
-  completedText: string;
-}
-
-interface UsageRateLimitWindow {
-  usedPercent: number;
-  windowDurationMins: number | null;
-  resetsAt: number;
-}
-
-interface UsageRateLimitSnapshot {
-  limitId: string;
-  limitName: string;
-  primary: UsageRateLimitWindow | null;
-  secondary: UsageRateLimitWindow | null;
 }
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -225,6 +198,8 @@ function dispatchRuntimeMessage(message: RuntimeRequest, sender: chrome.runtime.
       return getStatus();
     case 'deleteHistory':
       return deleteHistory();
+    case 'refreshModels':
+      return refreshModels();
     case 'triggerTextScan':
       return triggerActiveOverlay('text');
     case 'triggerImageScan':
@@ -299,9 +274,18 @@ async function handleOAuthCallback(callbackUrl: string, tabId: number): Promise<
   try {
     const tokenResult = await exchangeAuthorizationCode(parsed.code, pendingOAuth.verifier);
     await persistTokenResult(tokenResult);
-    await setStorage({
-      limitInfo: await refreshStoredLimitInfo(createAccessContextFromAccessToken(tokenResult.accessToken))
-    });
+    const accessContext = createAccessContextFromAccessToken(tokenResult.accessToken);
+    const valuesToStore: Partial<ExtensionStorage> = {
+      limitInfo: await refreshStoredLimitInfo(accessContext)
+    };
+    try {
+      const refreshedModels = await fetchLatestModelsData(accessContext);
+      valuesToStore.availableModels = refreshedModels.availableModels;
+      valuesToStore.codexClientVersion = refreshedModels.clientVersion;
+    } catch (error) {
+      console.warn('Unable to load ChatGPT models after login.', error);
+    }
+    await setStorage(valuesToStore);
     await removeStorage('pendingOAuth');
     await createContextMenus();
     await closeTab(tabId);
@@ -316,320 +300,6 @@ async function finishOAuthError(message: string): Promise<void> {
   await removeStorage('pendingOAuth');
   await setStorage({ authError: message });
   broadcastRuntimeMessage({ action: 'authChanged', error: message });
-}
-
-/** Builds the authorization URL for the ChatGPT OAuth PKCE flow. */
-function buildAuthorizationUrl(state: string, challenge: string): string {
-  const params = new URLSearchParams({
-    response_type: 'code',
-    client_id: CHATGPT_CLIENT_ID,
-    redirect_uri: CHATGPT_REDIRECT_URI,
-    scope: CHATGPT_SCOPE,
-    code_challenge: challenge,
-    code_challenge_method: 'S256',
-    state,
-    id_token_add_organizations: 'true',
-    codex_cli_simplified_flow: 'true',
-    originator: 'codex_cli_rs'
-  });
-  return `${CHATGPT_AUTH_URL}?${params.toString()}`;
-}
-
-/** Exchanges the OAuth authorization code for access and refresh tokens. */
-async function exchangeAuthorizationCode(code: string, verifier: string): Promise<TokenResult> {
-  const response = await fetch(CHATGPT_TOKEN_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded'
-    },
-    body: new URLSearchParams({
-      client_id: CHATGPT_CLIENT_ID,
-      code,
-      code_verifier: verifier,
-      grant_type: 'authorization_code',
-      redirect_uri: CHATGPT_REDIRECT_URI
-    })
-  });
-
-  if (!response.ok) {
-    throw new Error(`Token exchange failed with status ${response.status}.`);
-  }
-
-  return parseTokenResponse(await response.json());
-}
-
-/** Exchanges a refresh token for a new access token when the current one is near expiry. */
-async function refreshAccessToken(refreshToken: string): Promise<TokenResult> {
-  const response = await fetch(CHATGPT_TOKEN_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded'
-    },
-    body: new URLSearchParams({
-      grant_type: 'refresh_token',
-      refresh_token: refreshToken,
-      client_id: CHATGPT_CLIENT_ID
-    })
-  });
-
-  if (!response.ok) {
-    throw new Error(`Token refresh failed with status ${response.status}.`);
-  }
-
-  return parseTokenResponse(await response.json());
-}
-
-/** Validates and normalizes the token payload returned by ChatGPT auth endpoints. */
-function parseTokenResponse(data: unknown): TokenResult {
-  const payload = asRecord(data);
-  const accessToken = typeof payload.access_token === 'string' ? payload.access_token : '';
-  const refreshToken = typeof payload.refresh_token === 'string' ? payload.refresh_token : '';
-  const expiresIn = typeof payload.expires_in === 'number' || typeof payload.expires_in === 'string'
-    ? Number(payload.expires_in)
-    : NaN;
-
-  if (!accessToken || !refreshToken || !Number.isFinite(expiresIn)) {
-    throw new Error('ChatGPT returned an invalid token response.');
-  }
-
-  return {
-    accessToken,
-    refreshToken,
-    expiresAt: Date.now() + expiresIn * 1000
-  };
-}
-
-/** Persists tokens plus account metadata extracted from the returned JWT. */
-async function persistTokenResult(tokenResult: TokenResult): Promise<void> {
-  const email = readJwtClaim(tokenResult.accessToken, ['https://api.openai.com/profile', 'email'])
-    || readJwtClaim(tokenResult.accessToken, ['email']);
-  const chatgptAccountId = readJwtClaim(tokenResult.accessToken, ['https://api.openai.com/auth', 'chatgpt_account_id']);
-
-  await setStorage({
-    accessToken: tokenResult.accessToken,
-    refreshToken: tokenResult.refreshToken,
-    expiresAt: tokenResult.expiresAt,
-    accountEmail: email || null,
-    chatgptAccountId: chatgptAccountId || null,
-    authError: null
-  });
-}
-
-/** Builds the minimal auth context required for ChatGPT API calls. */
-function createAccessContextFromAccessToken(accessToken: string): AccessContext {
-  return {
-    accessToken,
-    chatgptAccountId: readJwtClaim(accessToken, ['https://api.openai.com/auth', 'chatgpt_account_id'])
-  };
-}
-
-/** Returns a valid access context, refreshing tokens when the current token is too close to expiry. */
-async function getValidAccessContext(): Promise<AccessContext> {
-  const stored = await getStorage(['accessToken', 'refreshToken', 'expiresAt', 'chatgptAccountId'] as const);
-  if (!stored.refreshToken && !stored.accessToken) {
-    throw new Error('Please sign in with ChatGPT first.');
-  }
-
-  if (stored.accessToken && stored.expiresAt && stored.expiresAt > Date.now() + TOKEN_REFRESH_BUFFER_MS) {
-    return {
-      accessToken: stored.accessToken,
-      chatgptAccountId: stored.chatgptAccountId || readJwtClaim(stored.accessToken, ['https://api.openai.com/auth', 'chatgpt_account_id'])
-    };
-  }
-
-  if (!stored.refreshToken) {
-    throw new Error('Your ChatGPT session expired. Please sign in again.');
-  }
-
-  const tokenResult = await refreshAccessToken(stored.refreshToken);
-  await persistTokenResult(tokenResult);
-  return {
-    accessToken: tokenResult.accessToken,
-    chatgptAccountId: readJwtClaim(tokenResult.accessToken, ['https://api.openai.com/auth', 'chatgpt_account_id'])
-  };
-}
-
-/** Sends a prompt and optional image to the ChatGPT responses endpoint and returns the final text. */
-async function callChatGpt({
-  prompt,
-  imageDataUrl,
-  model = DEFAULT_MODEL,
-  instructions = TEXT_SOLVER_PROMPT,
-  responseStyle = 'medium'
-}: {
-  prompt: string;
-  imageDataUrl?: string | null;
-  model?: string;
-  instructions?: string;
-  responseStyle?: 'low' | 'medium' | 'high';
-}): Promise<string> {
-  const accessContext = await getValidAccessContext();
-  const content: Array<Record<string, string>> = [{ type: 'input_text', text: prompt }];
-  if (imageDataUrl) {
-    content.push({ type: 'input_image', image_url: imageDataUrl });
-  }
-
-  const headers: Record<string, string> = {
-    Accept: 'text/event-stream',
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${accessContext.accessToken}`,
-    'OpenAI-Beta': 'responses=experimental',
-    originator: 'codex_cli_rs'
-  };
-
-  if (accessContext.chatgptAccountId) {
-    headers['chatgpt-account-id'] = accessContext.chatgptAccountId;
-  }
-
-  const payload: Record<string, unknown> = {
-    model,
-    input: [
-      {
-        type: 'message',
-        role: 'user',
-        content
-      }
-    ],
-    stream: true,
-    store: false,
-    include: ['reasoning.encrypted_content'],
-    text: { verbosity: responseStyle },
-    reasoning: { effort: 'medium', summary: 'auto' },
-    instructions: instructions || '.'
-  };
-
-  const response = await fetch(CHATGPT_RESPONSES_URL, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(payload)
-  });
-
-  if (!response.ok) {
-    const body = await response.text().catch(() => '');
-    throw new Error(`ChatGPT request failed with status ${response.status}.${body ? ` ${body.slice(0, 240)}` : ''}`);
-  }
-
-  const contentType = response.headers.get('content-type') || '';
-  if (contentType.includes('text/event-stream') && response.body) {
-    return finalizeChatGptResponse(readResponseStream(response), accessContext);
-  }
-
-  const bodyText = await response.text();
-  if (bodyText.trimStart().startsWith('event:') || bodyText.trimStart().startsWith('data:')) {
-    return finalizeChatGptResponse(parseSseText(bodyText), accessContext);
-  }
-
-  return finalizeChatGptResponse(extractCompletedText(JSON.parse(bodyText) as AccessTokenClaimsResponse), accessContext);
-}
-
-/** Reads a streamed SSE response body and accumulates the emitted text deltas. */
-async function readResponseStream(response: Response): Promise<string> {
-  if (!response.body) {
-    return extractCompletedText(await response.json() as AccessTokenClaimsResponse);
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  const accumulator = createResponseAccumulator();
-
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) {
-      break;
-    }
-
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() || '';
-
-    for (const line of lines) {
-      appendSseLine(accumulator, line);
-    }
-  }
-
-  return finalizeResponseAccumulator(accumulator);
-}
-
-/** Parses an already-buffered SSE payload body into the final assistant text. */
-function parseSseText(bodyText: string): string {
-  const accumulator = createResponseAccumulator();
-
-  for (const line of bodyText.split(/\r?\n/)) {
-    appendSseLine(accumulator, line);
-  }
-
-  return finalizeResponseAccumulator(accumulator);
-}
-
-/** Creates the mutable accumulator used while parsing streamed response events. */
-function createResponseAccumulator(): ResponseAccumulator {
-  return {
-    text: '',
-    completedText: ''
-  };
-}
-
-/** Consumes a single SSE line and merges any delta or completion payload into the accumulator. */
-function appendSseLine(accumulator: ResponseAccumulator, line: string): void {
-  if (!line.startsWith('data:')) {
-    return;
-  }
-
-  const payload = line.slice(5).trim();
-  if (!payload || payload === '[DONE]') {
-    return;
-  }
-
-  const parsed = parseSsePayload(payload);
-  accumulator.text += parsed.delta;
-  accumulator.completedText = parsed.completedText || accumulator.completedText;
-}
-
-/** Chooses the best available text from the response accumulator. */
-function finalizeResponseAccumulator(accumulator: ResponseAccumulator): string {
-  return (accumulator.text || accumulator.completedText || 'No response text was returned.').trim();
-}
-
-/** Parses one SSE JSON event emitted by the responses endpoint. */
-function parseSsePayload(payload: string): ParsedSsePayload {
-  try {
-    const event = asRecord(JSON.parse(payload));
-    if (event.type === 'response.output_text.delta' && typeof event.delta === 'string') {
-      return { delta: event.delta, completedText: '' };
-    }
-
-    if (event.type === 'response.completed') {
-      return { delta: '', completedText: extractCompletedText(event.response || event) };
-    }
-  } catch (error) {
-    console.warn('Unable to parse ChatGPT stream event.', error);
-  }
-
-  return { delta: '', completedText: '' };
-}
-
-/** Extracts the final output text from a responses API payload. */
-function extractCompletedText(root: unknown): string {
-  const response = asRecord(root).response ? asRecord(asRecord(root).response) : asRecord(root);
-  const output = Array.isArray(response.output) ? response.output : [];
-  const parts: string[] = [];
-
-  for (const item of output) {
-    const message = asRecord(item);
-    if (message.type !== 'message' || !Array.isArray(message.content)) {
-      continue;
-    }
-
-    for (const part of message.content) {
-      const content = asRecord(part);
-      if (content.type === 'output_text' && typeof content.text === 'string') {
-        parts.push(content.text);
-      }
-    }
-  }
-
-  return parts.join('').trim();
 }
 
 /** Sends selected page text to ChatGPT using the lightweight ask flow. */
@@ -798,14 +468,16 @@ async function requestAndPublishResponse({
     await sendPageResponse(tabId, statusMessage, 'status');
   }
 
-  const [model, instructions] = await Promise.all([
+  const [model, reasoningEffort, instructions] = await Promise.all([
     getScanModel(kind),
+    getScanThinkingVariant(kind),
     getSystemPrompt(kind)
   ]);
   const answer = await callChatGpt({
     prompt,
     imageDataUrl,
     model,
+    reasoningEffort,
     instructions,
     responseStyle
   });
@@ -921,6 +593,10 @@ async function isLoggedIn(): Promise<boolean> {
 async function getStatus(): Promise<StatusPayload> {
   let data = await getStorage(STATUS_STORAGE_KEYS);
   let normalizedLimitInfo = normalizeLimitInfo(data.limitInfo ?? null);
+  let availableModels = normalizeAvailableModelsCatalog(data.availableModels);
+  let codexClientVersion = typeof data.codexClientVersion === 'string' && data.codexClientVersion.trim()
+    ? data.codexClientVersion
+    : getDefaultCodexClientVersion();
 
   if ((data.accessToken || data.refreshToken) && !hasRenderableLimitInfo(normalizedLimitInfo)) {
     try {
@@ -936,6 +612,20 @@ async function getStatus(): Promise<StatusPayload> {
     }
   }
 
+  if ((data.accessToken || data.refreshToken) && availableModels.length === 0) {
+    try {
+      const refreshedModels = await fetchLatestModelsData(await getValidAccessContext());
+      await setStorage({
+        availableModels: refreshedModels.availableModels,
+        codexClientVersion: refreshedModels.clientVersion
+      });
+      availableModels = refreshedModels.availableModels;
+      codexClientVersion = refreshedModels.clientVersion;
+    } catch (error) {
+      console.warn('Unable to load ChatGPT models for status.', error);
+    }
+  }
+
   const history = getNormalizedHistory(data.history, data.lastResponse);
   return {
     ok: true,
@@ -943,14 +633,18 @@ async function getStatus(): Promise<StatusPayload> {
     accountEmail: data.accountEmail || '',
     requestCount: typeof data.requestCount === 'number' && Number.isInteger(data.requestCount) ? data.requestCount : 0,
     limitInfo: normalizedLimitInfo,
+    availableModels,
+    codexClientVersion,
     expiresAt: data.expiresAt || null,
     lastResponse: data.lastResponse || '',
     history,
     historyIndex: getNormalizedHistoryIndex(data.historyIndex, history.length),
-    textScanModel: normalizeStoredModel(data.textScanModel, data.textScanCustomModel),
+    textScanModel: normalizeStoredModel(data.textScanModel, data.textScanCustomModel, availableModels),
     textScanCustomModel: data.textScanCustomModel || '',
-    imageScanModel: normalizeStoredModel(data.imageScanModel, data.imageScanCustomModel),
+    textScanThinkingVariant: getStatusThinkingVariant('text', data, availableModels),
+    imageScanModel: normalizeStoredModel(data.imageScanModel, data.imageScanCustomModel, availableModels),
     imageScanCustomModel: data.imageScanCustomModel || '',
+    imageScanThinkingVariant: getStatusThinkingVariant('image', data, availableModels),
     textSystemPromptPreset: normalizeSystemPromptPreset(data.textSystemPromptPreset, data.textCustomSystemPrompt),
     textCustomSystemPrompt: data.textCustomSystemPrompt || '',
     imageSystemPromptPreset: normalizeSystemPromptPreset(data.imageSystemPromptPreset, data.imageCustomSystemPrompt),
@@ -986,9 +680,19 @@ async function deleteHistory(): Promise<Result> {
 
 /** Resolves the effective model for a scan mode from stored popup settings. */
 async function getScanModel(kind: ScanKind): Promise<string> {
-  const settings = getScanSettings(kind);
-  const data = await getStorage([settings.modelKey, settings.customModelKey]);
-  return resolveModelValue(data[settings.modelKey], data[settings.customModelKey]);
+  const scanSettingsState = await getStoredScanSettings(kind);
+  return resolveModelValue(
+    scanSettingsState.storedModel,
+    scanSettingsState.storedCustomModel,
+    scanSettingsState.availableModels
+  );
+}
+
+/** Resolves the effective thinking variant for a scan mode from stored popup settings. */
+async function getScanThinkingVariant(kind: ScanKind): Promise<ThinkingVariant> {
+  const scanSettingsState = await getStoredScanSettings(kind);
+  const selectedModel = resolveModelValue(scanSettingsState.storedModel, '', scanSettingsState.availableModels);
+  return normalizeThinkingVariant(scanSettingsState.storedThinkingVariant, selectedModel, scanSettingsState.availableModels);
 }
 
 /** Resolves the effective system prompt for a scan mode from stored popup settings. */
@@ -1021,6 +725,61 @@ async function signOut(): Promise<Result> {
   return { ok: true };
 }
 
+/** Refreshes the remote model catalog on demand for the popup refresh buttons. */
+async function refreshModels(): Promise<Result> {
+  const refreshedModels = await fetchLatestModelsData(await getValidAccessContext());
+  await setStorage({
+    availableModels: refreshedModels.availableModels,
+    codexClientVersion: refreshedModels.clientVersion
+  });
+  broadcastRuntimeMessage({ action: 'responseUpdated' });
+  return { ok: true };
+}
+
+/** Loads the latest npm-published Codex version, then fetches the matching model catalog. */
+async function fetchLatestModelsData(accessContext: ReturnType<typeof createAccessContextFromAccessToken>): Promise<{
+  availableModels: AvailableModel[];
+  clientVersion: string;
+}> {
+  let clientVersion = getDefaultCodexClientVersion();
+  try {
+    clientVersion = await fetchCodexClientVersion();
+  } catch (error) {
+    console.warn('Unable to load Codex client version from npm.', error);
+  }
+
+  return {
+    availableModels: normalizeAvailableModelsCatalog(await fetchAvailableModels(accessContext, clientVersion)),
+    clientVersion
+  };
+}
+
+/** Resolves a valid thinking variant for status payloads. */
+function getStatusThinkingVariant(kind: ScanKind, data: Partial<ExtensionStorage>, availableModels: AvailableModel[]): ThinkingVariant {
+  const settings = getScanSettings(kind);
+  const selectedModel = normalizeStoredModel(data[settings.modelKey], data[settings.customModelKey], availableModels);
+  return normalizeThinkingVariant(data[settings.thinkingVariantKey], selectedModel, availableModels);
+}
+
+interface StoredScanSettingsState {
+  availableModels: AvailableModel[];
+  storedModel: unknown;
+  storedCustomModel: unknown;
+  storedThinkingVariant: unknown;
+}
+
+/** Reads one scan mode's stored model selection state with normalized available models. */
+async function getStoredScanSettings(kind: ScanKind): Promise<StoredScanSettingsState> {
+  const settings = getScanSettings(kind);
+  const data = await getStorage([settings.modelKey, settings.customModelKey, settings.thinkingVariantKey, 'availableModels']);
+  return {
+    availableModels: normalizeAvailableModelsCatalog(data.availableModels),
+    storedModel: data[settings.modelKey],
+    storedCustomModel: data[settings.customModelKey],
+    storedThinkingVariant: data[settings.thinkingVariantKey]
+  };
+}
+
 /** Extracts the OAuth authorization code and state from the callback URL. */
 function parseCallbackUrl(url: string): { code: string; state: string } {
   const parsed = new URL(url);
@@ -1049,576 +808,7 @@ async function closeTab(tabId: number): Promise<void> {
   }
 }
 
-/** Converts an unknown error into the standard extension error result shape. */
-function toErrorResult(error: unknown): ErrorResult {
-  return { ok: false, error: getErrorMessage(error) };
-}
-
 /** Checks whether a tab URL points at a normal web page that can receive the overlay. */
 function isSupportedPageUrl(url = ''): boolean {
   return url.startsWith('http://') || url.startsWith('https://');
-}
-
-/** Finalizes a ChatGPT response and updates rate-limit tracking before returning the text. */
-async function finalizeChatGptResponse(textOrPromise: Promise<string> | string, accessContext: AccessContext): Promise<string> {
-  const text = await Promise.resolve(textOrPromise);
-  await maybeRefreshLimitInfo(accessContext);
-  return text;
-}
-
-/** Increments request counters and periodically refreshes stored rate-limit info. */
-async function maybeRefreshLimitInfo(accessContext: AccessContext): Promise<void> {
-  const { requestCount = 0 } = await getStorage(['requestCount'] as const);
-  const nextCount = Number.isInteger(requestCount) ? requestCount + 1 : 1;
-  const shouldRefresh = nextCount === 1 || nextCount % LIMIT_REFRESH_INTERVAL === 0;
-  const values: Partial<ExtensionStorage> = { requestCount: nextCount };
-
-  if (shouldRefresh) {
-    values.limitInfo = await refreshStoredLimitInfo(accessContext);
-  }
-
-  await setStorage(values);
-  if (shouldRefresh) {
-    broadcastRuntimeMessage({ action: 'responseUpdated' });
-  }
-}
-
-/** Refreshes stored limit data while falling back to the previous cached snapshot on failure. */
-async function refreshStoredLimitInfo(accessContext: AccessContext): Promise<StoredLimitInfo> {
-  try {
-    return await fetchLimitInfo(accessContext);
-  } catch (error) {
-    console.warn('Unable to refresh ChatGPT limit info.', error);
-    return (await getStorage(['limitInfo'] as const)).limitInfo || null;
-  }
-}
-
-/** Calls the ChatGPT usage endpoint and converts the response into popup-friendly limit info. */
-async function fetchLimitInfo(accessContext: AccessContext): Promise<LimitInfo> {
-  const headers: Record<string, string> = {
-    Accept: 'application/json',
-    Authorization: `Bearer ${accessContext.accessToken}`,
-    originator: 'codex_cli_rs'
-  };
-
-  if (accessContext.chatgptAccountId) {
-    headers['chatgpt-account-id'] = accessContext.chatgptAccountId;
-  }
-
-  const response = await fetch(CHATGPT_USAGE_URL, {
-    method: 'GET',
-    headers
-  });
-
-  if (!response.ok) {
-    throw new Error(`ChatGPT limit check failed with status ${response.status}.`);
-  }
-
-  return createLimitInfoPayload(await response.json());
-}
-
-/** Extracts the primary, additional, and code-review rate-limit snapshots from the usage payload. */
-function parseUsageRateLimitPayload(payload: unknown): UsageRateLimitSnapshot[] {
-  const data = asRecord(payload);
-  const snapshots: UsageRateLimitSnapshot[] = [
-    createUsageRateLimitSnapshot({
-      limitId: DEFAULT_LIMIT_ID,
-      limitName: '',
-      rateLimit: asRecord(data.rate_limit)
-    })
-  ];
-
-  const additional = Array.isArray(data.additional_rate_limits) ? data.additional_rate_limits : [];
-  for (const item of additional) {
-    const entry = asRecord(item);
-    snapshots.push(createUsageRateLimitSnapshot({
-      limitId: typeof entry.metered_feature === 'string' ? entry.metered_feature : typeof entry.limit_name === 'string' ? entry.limit_name : '',
-      limitName: typeof entry.limit_name === 'string' ? entry.limit_name : '',
-      rateLimit: asRecord(entry.rate_limit)
-    }));
-  }
-
-  const codeReviewSnapshot = createUsageRateLimitSnapshot({
-    limitId: 'code_review',
-    limitName: 'Code Review',
-    rateLimit: asRecord(data.code_review_rate_limit)
-  });
-  if (hasRateLimitSnapshotData(codeReviewSnapshot)) {
-    snapshots.push(codeReviewSnapshot);
-  }
-
-  return snapshots;
-}
-
-/** Builds a normalized rate-limit snapshot from one usage entry. */
-function createUsageRateLimitSnapshot({
-  limitId,
-  limitName,
-  rateLimit
-}: {
-  limitId: string;
-  limitName: string;
-  rateLimit: Record<string, unknown>;
-}): UsageRateLimitSnapshot {
-  return {
-    limitId: normalizeLimitId(limitId || DEFAULT_LIMIT_ID),
-    limitName: normalizeOptionalString(limitName),
-    primary: parseUsageRateLimitWindow(asRecord(rateLimit.primary_window)),
-    secondary: parseUsageRateLimitWindow(asRecord(rateLimit.secondary_window))
-  };
-}
-
-/** Normalizes one usage window into the compact structure used by the popup. */
-function parseUsageRateLimitWindow(window: Record<string, unknown>): UsageRateLimitWindow | null {
-  const usedPercent = tryGetNumber(window.used_percent);
-  const windowDurationMins = tryGetWindowDurationMins(window);
-  const resetsAt = tryGetInt(window.reset_at);
-  const hasData = usedPercent != null || windowDurationMins != null || resetsAt != null;
-
-  if (!hasData || resetsAt == null) {
-    return null;
-  }
-
-  return {
-    usedPercent: roundLimitPercent(Math.max(0, usedPercent ?? 0)),
-    windowDurationMins,
-    resetsAt
-  };
-}
-
-/** Checks whether a snapshot contains at least one usable rate-limit window. */
-function hasRateLimitSnapshotData(snapshot: UsageRateLimitSnapshot): boolean {
-  return Boolean(snapshot.primary || snapshot.secondary);
-}
-
-/** Converts the raw usage payload into the normalized limit info shown in the popup. */
-function createLimitInfoPayload(payload: unknown): LimitInfo {
-  return {
-    planName: extractPlanName(payload),
-    items: createLimitInfoItems(parseUsageRateLimitPayload(payload))
-  };
-}
-
-/** Flattens multiple usage snapshots into the list rendered in the popup. */
-function createLimitInfoItems(snapshots: UsageRateLimitSnapshot[]): LimitInfoItem[] {
-  if (!Array.isArray(snapshots)) {
-    return [];
-  }
-
-  const items: LimitInfoItem[] = [];
-  for (const snapshot of snapshots) {
-    if (!hasRateLimitSnapshotData(snapshot)) {
-      continue;
-    }
-
-    if (snapshot.primary) {
-      const item = createLimitInfoItem(snapshot, snapshot.primary, 'primary');
-      if (item) {
-        items.push(item);
-      }
-    }
-
-    if (snapshot.secondary) {
-      const item = createLimitInfoItem(snapshot, snapshot.secondary, 'secondary');
-      if (item) {
-        items.push(item);
-      }
-    }
-  }
-
-  return items;
-}
-
-/** Builds one popup-friendly rate-limit row from a snapshot window. */
-function createLimitInfoItem(
-  snapshot: UsageRateLimitSnapshot,
-  window: UsageRateLimitWindow,
-  windowType: 'primary' | 'secondary'
-): LimitInfoItem | null {
-  if (window.resetsAt == null) {
-    return null;
-  }
-
-  const usedPercent = roundLimitPercent(Math.max(0, window.usedPercent ?? 0));
-  const leftPercent = roundLimitPercent(Math.max(0, 100 - usedPercent));
-  return {
-    id: `${snapshot.limitId || DEFAULT_LIMIT_ID}:${window.windowDurationMins ?? 0}:${windowType}`,
-    featureLabel: getLimitDisplayName(snapshot),
-    windowLabel: getLimitWindowLabel(window.windowDurationMins),
-    leftPercent,
-    usedPercent,
-    resetsAt: window.resetsAt,
-    windowDurationMins: window.windowDurationMins ?? 0,
-    limitId: snapshot.limitId || DEFAULT_LIMIT_ID
-  };
-}
-
-/** Formats a usage-window duration into a short popup label such as `1h` or `30m`. */
-function getLimitWindowLabel(windowDurationMins: number | null): string {
-  if (windowDurationMins && windowDurationMins > 0) {
-    if (windowDurationMins % 1440 === 0) {
-      return `${windowDurationMins / 1440}d`;
-    }
-
-    if (windowDurationMins % 60 === 0) {
-      return `${windowDurationMins / 60}h`;
-    }
-
-    return `${windowDurationMins}m`;
-  }
-
-  return '';
-}
-
-/** Resolves the human-readable feature label for a usage snapshot. */
-function getLimitDisplayName(snapshot: UsageRateLimitSnapshot): string {
-  if (snapshot.limitName) {
-    return snapshot.limitName;
-  }
-
-  if (!snapshot.limitId || snapshot.limitId === DEFAULT_LIMIT_ID) {
-    return '';
-  }
-
-  return prettifyLimitId(snapshot.limitId);
-}
-
-/** Converts an internal limit id into title-cased display text. */
-function prettifyLimitId(value: string): string {
-  return String(value || DEFAULT_LIMIT_ID)
-    .replace(/[_-]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .replace(/\b\w/g, (match) => match.toUpperCase()) || 'Limit';
-}
-
-/** Normalizes a limit identifier into the lowercase underscore format used internally. */
-function normalizeLimitId(value: unknown): string {
-  return String(value || DEFAULT_LIMIT_ID).trim().toLowerCase().replace(/-/g, '_') || DEFAULT_LIMIT_ID;
-}
-
-/** Converts unknown values to trimmed strings for popup-facing normalization. */
-function normalizeOptionalString(value: unknown): string {
-  return String(value || '').trim();
-}
-
-/** Converts a limit window duration from seconds to rounded-up minutes. */
-function tryGetWindowDurationMins(window: Record<string, unknown>): number | null {
-  const rawSeconds = tryGetInt(window.limit_window_seconds);
-  if (rawSeconds == null || rawSeconds <= 0) {
-    return null;
-  }
-
-  return Math.ceil(rawSeconds / 60);
-}
-
-/** Parses an integer from a number or numeric string field. */
-function tryGetInt(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return Math.trunc(value);
-  }
-
-  if (typeof value === 'string' && value.trim()) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? Math.trunc(parsed) : null;
-  }
-
-  return null;
-}
-
-/** Parses a numeric value from a number or numeric string field. */
-function tryGetNumber(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return value;
-  }
-
-  if (typeof value === 'string' && value.trim()) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-
-  return null;
-}
-
-/** Rounds percentages to the precision used in popup limit displays. */
-function roundLimitPercent(value: number): number {
-  return Number(value.toFixed(LIMIT_PERCENT_PRECISION));
-}
-
-/** Normalizes any stored limit payload into the latest popup-ready structure. */
-function normalizeLimitInfo(limitInfo: StoredLimitInfo): LimitInfo | null {
-  if (!limitInfo || typeof limitInfo !== 'object') {
-    return null;
-  }
-
-  const data = asRecord(limitInfo);
-  const planName = normalizePlanName(
-    data.planName
-    || data.plan
-    || data.planType
-    || data.subscriptionPlan
-  );
-  const items = Array.isArray(data.items)
-    ? data.items.map(normalizeLimitInfoItem).filter((item): item is LimitInfoItem => item !== null)
-    : [];
-
-  if (items.length > 0 || planName) {
-    return {
-      planName,
-      items
-    };
-  }
-
-  return normalizeLegacyLimitInfo(data);
-}
-
-/** Converts the older single-limit storage format into the current normalized structure. */
-function normalizeLegacyLimitInfo(limitInfo: Record<string, unknown>): LimitInfo | null {
-  const leftPercent = tryGetNumber(limitInfo.leftPercent);
-  const resetsAt = tryGetInt(limitInfo.resetsAt);
-  const windowDurationMins = tryGetInt(limitInfo.windowDurationMins);
-  if (leftPercent == null || resetsAt == null || windowDurationMins == null) {
-    return null;
-  }
-
-  const item = normalizeLimitInfoItem({
-    id: `${DEFAULT_LIMIT_ID}:${windowDurationMins}:legacy`,
-    featureLabel: typeof limitInfo.label === 'string' ? limitInfo.label : prettifyLimitId(DEFAULT_LIMIT_ID),
-    windowLabel: getLimitWindowLabel(windowDurationMins),
-    leftPercent,
-    usedPercent: tryGetNumber(limitInfo.usedPercent) ?? Math.max(0, 100 - leftPercent),
-    resetsAt,
-    windowDurationMins,
-    limitId: DEFAULT_LIMIT_ID
-  });
-
-  if (!item) {
-    return null;
-  }
-
-  return {
-    planName: '',
-    items: [item]
-  };
-}
-
-/** Normalizes one stored limit item into the exact structure expected by the popup. */
-function normalizeLimitInfoItem(item: unknown): LimitInfoItem | null {
-  const data = asRecord(item);
-  const leftPercent = tryGetNumber(data.leftPercent);
-  const resetsAt = tryGetInt(data.resetsAt);
-  const windowDurationMins = tryGetInt(data.windowDurationMins);
-  if (leftPercent == null || resetsAt == null || windowDurationMins == null) {
-    return null;
-  }
-
-  const normalizedLimitId = normalizeLimitId(data.limitId);
-  let featureLabel = normalizeOptionalString(data.featureLabel);
-  if (normalizedLimitId === DEFAULT_LIMIT_ID && featureLabel.toLowerCase() === prettifyLimitId(DEFAULT_LIMIT_ID).toLowerCase()) {
-    featureLabel = '';
-  }
-
-  return {
-    id: normalizeOptionalString(data.id) || `${DEFAULT_LIMIT_ID}:${windowDurationMins}:item`,
-    featureLabel: featureLabel || (normalizedLimitId === DEFAULT_LIMIT_ID ? '' : prettifyLimitId(normalizedLimitId)),
-    windowLabel: normalizeOptionalString(data.windowLabel) || getLimitWindowLabel(windowDurationMins),
-    leftPercent: roundLimitPercent(leftPercent),
-    usedPercent: roundLimitPercent(tryGetNumber(data.usedPercent) ?? Math.max(0, 100 - leftPercent)),
-    resetsAt,
-    windowDurationMins,
-    limitId: normalizedLimitId
-  };
-}
-
-/** Checks whether normalized limit info contains any value worth rendering in the popup. */
-function hasRenderableLimitInfo(limitInfo: LimitInfo | null): boolean {
-  return Boolean(limitInfo?.planName) || (Array.isArray(limitInfo?.items) && limitInfo.items.length > 0);
-}
-
-/** Searches the usage payload for the user's plan name using known fields first. */
-function extractPlanName(payload: unknown): string {
-  const data = asRecord(payload);
-  const directCandidates = [
-    data.plan,
-    data.plan_name,
-    data.plan_type,
-    data.planType,
-    data.subscription_plan,
-    data.subscriptionPlan,
-    data.subscription_tier,
-    data.subscriptionTier,
-    data.account_plan,
-    data.accountPlan,
-    data.tier,
-    asRecord(data.workspace).plan,
-    asRecord(data.workspace).plan_name,
-    asRecord(data.workspace).plan_type,
-    asRecord(data.workspace).subscription_plan,
-    asRecord(data.organization).plan,
-    asRecord(data.organization).plan_name,
-    asRecord(data.organization).plan_type,
-    asRecord(data.org).plan,
-    asRecord(data.org).plan_name,
-    asRecord(data.org).plan_type,
-    asRecord(data.account).plan,
-    asRecord(data.account).plan_name,
-    asRecord(data.account).plan_type,
-    asRecord(data.subscription).plan,
-    asRecord(data.subscription).plan_name,
-    asRecord(data.subscription).plan_type,
-    asRecord(data.user).plan,
-    asRecord(data.user).plan_name,
-    asRecord(data.user).plan_type
-  ];
-
-  for (const candidate of directCandidates) {
-    const normalized = normalizePlanName(candidate);
-    if (normalized) {
-      return normalized;
-    }
-  }
-
-  return findPlanNameRecursively(payload);
-}
-
-/** Recursively walks a usage payload to find a plausible plan or subscription name. */
-function findPlanNameRecursively(value: unknown, depth = 0): string {
-  if (depth > 4 || value == null) {
-    return '';
-  }
-
-  if (typeof value === 'string') {
-    return normalizePlanName(value);
-  }
-
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const normalized = findPlanNameRecursively(item, depth + 1);
-      if (normalized) {
-        return normalized;
-      }
-    }
-    return '';
-  }
-
-  if (typeof value !== 'object') {
-    return '';
-  }
-
-  for (const [key, nestedValue] of Object.entries(value)) {
-    if (!/(plan|tier|subscription)/i.test(key)) {
-      continue;
-    }
-
-    const normalized = findPlanNameRecursively(nestedValue, depth + 1);
-    if (normalized) {
-      return normalized;
-    }
-  }
-
-  return '';
-}
-
-/** Normalizes a raw plan name into a compact display label. */
-function normalizePlanName(value: unknown): string {
-  const normalized = normalizeOptionalString(value).toLowerCase();
-  if (!normalized) {
-    return '';
-  }
-
-  const knownPlans = ['free', 'plus', 'pro', 'team', 'business', 'enterprise', 'edu'];
-  const matchedKnownPlan = knownPlans.find((plan) => normalized === plan || normalized.includes(plan));
-  if (matchedKnownPlan) {
-    return matchedKnownPlan.charAt(0).toUpperCase() + matchedKnownPlan.slice(1);
-  }
-
-  if (!/(plan|tier|subscription)/i.test(normalized)) {
-    return '';
-  }
-
-  return normalized
-    .replace(/[_-]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .replace(/\b\w/g, (match) => match.toUpperCase());
-}
-
-/** Generates a cryptographically random base64url string for PKCE values. */
-function base64UrlRandom(byteLength: number): string {
-  const bytes = new Uint8Array(byteLength);
-  crypto.getRandomValues(bytes);
-  return base64UrlEncode(bytes);
-}
-
-/** Creates the SHA-256 PKCE code challenge for the provided verifier. */
-function createCodeChallenge(verifier: string): Promise<string> {
-  const bytes = new TextEncoder().encode(verifier);
-  return crypto.subtle.digest('SHA-256', bytes).then(base64UrlEncode);
-}
-
-/** Encodes bytes into URL-safe base64 without padding. */
-function base64UrlEncode(input: ArrayBuffer | Uint8Array): string {
-  const bytes = input instanceof ArrayBuffer ? new Uint8Array(input) : input;
-  let binary = '';
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
-  }
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
-}
-
-/** Reads a nested claim from a JWT payload without failing on malformed tokens. */
-function readJwtClaim(token: string | undefined, path: string[]): string | null {
-  if (!token || !Array.isArray(path)) {
-    return null;
-  }
-
-  const parts = token.split('.');
-  if (parts.length < 2) {
-    return null;
-  }
-
-  try {
-    const tokenPayloadPart = parts[1];
-    if (!tokenPayloadPart) {
-      return null;
-    }
-    const payload = JSON.parse(atob(tokenPayloadPart.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(tokenPayloadPart.length / 4) * 4, '='))) as Record<string, unknown>;
-    let current: unknown = payload;
-    for (const key of path) {
-      current = asRecord(current)[key];
-      if (current == null) {
-        return null;
-      }
-    }
-    return typeof current === 'string' ? current : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Throws when a typed result object represents an error instead of success data. */
-function unwrapResult<T extends object>(result: Result<T>): T {
-  if (!result.ok) {
-    throw new Error(result.error);
-  }
-
-  return result;
-}
-
-/** Converts unknown error values into readable fallback strings. */
-function getErrorMessage(error: unknown, fallback = 'Unknown error'): string {
-  if (error instanceof Error && error.message) {
-    return error.message;
-  }
-
-  if (typeof error === 'string' && error.trim()) {
-    return error;
-  }
-
-  return fallback;
-}
-
-/** Coerces unknown values into safe record objects for defensive parsing. */
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' ? value as Record<string, unknown> : {};
 }

@@ -72,14 +72,14 @@
                 <small>Shift+T | Repeat: Num 1</small>
               </span>
             </button>
-            <label class="model-label" for="textModelSelect">Text model</label>
-            <select id="textModelSelect" class="model-select">
-              <option value="gpt-5.4">gpt-5.4</option>
-              <option value="gpt-5.4-mini">gpt-5.4-mini</option>
-              <option value="gpt-5.3-codex">gpt-5.3-codex</option>
-              <option value="gpt-5.2">gpt-5.2</option>
-              <option value="other">Other</option>
-            </select>
+            <div class="control-label-row">
+              <label class="model-label" for="textModelSelect">Text model</label>
+              <button id="textModelRefreshButton" class="icon-button" type="button" aria-label="Refresh text models" title="Refresh models">↻</button>
+            </div>
+            <div class="model-row">
+              <select id="textModelSelect" class="model-select"></select>
+              <select id="textThinkingSelect" class="model-select"></select>
+            </div>
             <input id="textCustomModel" class="model-input" type="text" placeholder="Enter text scan model" hidden>
           </div>
 
@@ -90,14 +90,14 @@
                 <small>Shift+I | Repeat: Num 2</small>
               </span>
             </button>
-            <label class="model-label" for="imageModelSelect">Image model</label>
-            <select id="imageModelSelect" class="model-select">
-              <option value="gpt-5.4">gpt-5.4</option>
-              <option value="gpt-5.4-mini">gpt-5.4-mini</option>
-              <option value="gpt-5.3-codex">gpt-5.3-codex</option>
-              <option value="gpt-5.2">gpt-5.2</option>
-              <option value="other">Other</option>
-            </select>
+            <div class="control-label-row">
+              <label class="model-label" for="imageModelSelect">Image model</label>
+              <button id="imageModelRefreshButton" class="icon-button" type="button" aria-label="Refresh image models" title="Refresh models">↻</button>
+            </div>
+            <div class="model-row">
+              <select id="imageModelSelect" class="model-select"></select>
+              <select id="imageThinkingSelect" class="model-select"></select>
+            </div>
             <input id="imageCustomModel" class="model-input" type="text" placeholder="Enter image scan model" hidden>
           </div>
         </div>
