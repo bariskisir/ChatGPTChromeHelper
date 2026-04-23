@@ -1,0 +1,138 @@
+﻿<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ChatGPT Chrome Helper</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="popup-shell">
+      <header class="app-header">
+        <div class="brand-mark" aria-hidden="true">
+          <img class="brand-mark-image" src="chatgpt-icon.png" alt="">
+        </div>
+        <div class="header-copy">
+          <h1>ChatGPT Chrome Helper</h1>
+          <div class="account-row">
+            <div class="account-meta">
+              <p id="accountLabel">Not signed in</p>
+              <span id="planLabel" class="plan-label" hidden></span>
+            </div>
+            <div id="limitList" class="limit-list" hidden></div>
+          </div>
+        </div>
+      </header>
+
+      <section id="signedOutView" class="panel">
+        <p class="muted">Sign in with ChatGPT to use page scans and right-click features.</p>
+        <button id="loginButton" class="primary-button" type="button">
+          <span class="button-icon" aria-hidden="true">&gt;</span>
+          <span class="button-label">Sign in with ChatGPT</span>
+        </button>
+        <p id="authError" class="error-text" hidden></p>
+      </section>
+
+      <section id="signedInView" class="panel" hidden>
+        <div class="response-panel">
+          <div class="history-header">
+            <button id="historyPrev" class="history-button" type="button" aria-label="Previous history item">&lt;</button>
+            <div>
+              <div id="historyCounter" class="history-counter">0 / 0</div>
+            </div>
+            <button id="historyNext" class="history-button" type="button" aria-label="Next history item">&gt;</button>
+            <button id="deleteHistoryButton" class="delete-history-button" type="button" aria-label="Delete history" title="Delete history">
+              <span aria-hidden="true">&#128465;</span>
+            </button>
+            <button id="signOutButton" class="history-sign-out-button" type="button">Sign out</button>
+          </div>
+          <div class="history-grid">
+            <div class="history-column">
+              <div class="history-label-row">
+                <div class="history-label">Input</div>
+                <button id="copyInputButton" class="copy-button" type="button" aria-label="Copy input" title="Copy input">Copy</button>
+              </div>
+              <div id="historyInput" class="history-box"><img id="historyInputImage" class="history-image" alt="" hidden><span id="historyInputText">No history yet.</span></div>
+            </div>
+            <div class="history-column">
+              <div class="history-label-row">
+                <div class="history-label">Output</div>
+                <button id="copyOutputButton" class="copy-button" type="button" aria-label="Copy output" title="Copy output">Copy</button>
+              </div>
+              <div id="historyOutput" class="history-box">No history yet.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="action-grid">
+          <div class="scan-control">
+            <button id="textScanButton" class="primary-button" type="button">
+              <span class="button-copy">
+                <span class="button-label">Scan Text</span>
+                <small>Shift+T | Repeat: Num 1</small>
+              </span>
+            </button>
+            <label class="model-label" for="textModelSelect">Text model</label>
+            <select id="textModelSelect" class="model-select">
+              <option value="gpt-5.4">gpt-5.4</option>
+              <option value="gpt-5.4-mini">gpt-5.4-mini</option>
+              <option value="gpt-5.3-codex">gpt-5.3-codex</option>
+              <option value="gpt-5.2">gpt-5.2</option>
+              <option value="other">Other</option>
+            </select>
+            <input id="textCustomModel" class="model-input" type="text" placeholder="Enter text scan model" hidden>
+          </div>
+
+          <div class="scan-control">
+            <button id="imageScanButton" class="secondary-button" type="button">
+              <span class="button-copy">
+                <span class="button-label">Scan Image</span>
+                <small>Shift+I | Repeat: Num 2</small>
+              </span>
+            </button>
+            <label class="model-label" for="imageModelSelect">Image model</label>
+            <select id="imageModelSelect" class="model-select">
+              <option value="gpt-5.4">gpt-5.4</option>
+              <option value="gpt-5.4-mini">gpt-5.4-mini</option>
+              <option value="gpt-5.3-codex">gpt-5.3-codex</option>
+              <option value="gpt-5.2">gpt-5.2</option>
+              <option value="other">Other</option>
+            </select>
+            <input id="imageCustomModel" class="model-input" type="text" placeholder="Enter image scan model" hidden>
+          </div>
+        </div>
+
+        <div class="prompt-settings">
+          <div class="prompt-grid">
+            <div class="prompt-control">
+              <label class="model-label" for="textSystemPromptSelect">Text system prompt</label>
+              <select id="textSystemPromptSelect" class="model-select">
+                <option value="solver">Solver</option>
+                <option value="none">None</option>
+                <option value="other">Other</option>
+              </select>
+              <textarea id="textCustomSystemPrompt" class="prompt-input" placeholder="Enter text scan system prompt"></textarea>
+            </div>
+            <div class="prompt-control">
+              <label class="model-label" for="imageSystemPromptSelect">Image system prompt</label>
+              <select id="imageSystemPromptSelect" class="model-select">
+                <option value="solver">Solver</option>
+                <option value="none">None</option>
+                <option value="other">Other</option>
+              </select>
+              <textarea id="imageCustomSystemPrompt" class="prompt-input" placeholder="Enter image scan system prompt"></textarea>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <footer class="app-footer">
+        <button id="developerLink" class="footer-link" type="button">Developed by Barış Kısır</button>
+        <button id="sourceLink" class="footer-link" type="button">Source</button>
+      </footer>
+    </main>
+    <script src="shared.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>
+
