@@ -1,6 +1,6 @@
 /** Handles image cropping and OCR work inside the content-script context. */
 import { createWorker, type Worker } from 'tesseract.js';
-import type { OcrImagePayload, SelectionCoordinates } from './types';
+import type { OcrImagePayload, SelectionCoordinates } from '../common/types';
 
 const WORKER_PATH = chrome.runtime.getURL('assets/tesseract/worker.min.js');
 const CORE_PATH = chrome.runtime.getURL('assets/tesseract-core');

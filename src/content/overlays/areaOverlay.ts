@@ -1,6 +1,8 @@
 /** Renders the reusable drag-to-select overlay used by text and image scans. */
-import { AREA_OVERLAY_ID } from './shared';
-import type { AreaOverlayOptions, ScanKind, SelectionCoordinates, SavedSelectionCoordinates } from './types';
+import { AREA_OVERLAY_ID } from '../../common/scanSettings';
+import { getStorage } from '../../common/storage';
+import { sendRuntimeMessage } from '../../common/messages';
+import type { AreaOverlayOptions, ScanKind, SelectionCoordinates, SavedSelectionCoordinates } from '../../common/types';
 
 const OVERLAY_CLEANUP_KEY = '__aiChromeHelperCleanupAreaOverlay';
 const OVERLAY_Z_INDEX = 2147483646;
@@ -125,7 +127,7 @@ function getReuseOverlayLabel(options: AreaOverlayOptions): string {
 /** Loads the last saved area for the current scan mode and previews it if usable. */
 async function hydratePreviousSelection(state: AreaOverlayState): Promise<void> {
   const storageKey = getOverlayStorageKey(state.options.mode);
-  const result = await chrome.storage.local.get([storageKey]);
+  const result = await getStorage([storageKey]);
   if (!state.overlay?.isConnected || state.selecting) {
     return;
   }
@@ -253,7 +255,7 @@ function cleanupAreaOverlay(state: AreaOverlayState): void {
 
 /** Waits for the overlay to disappear before sending capture coordinates to the background script. */
 function sendCoordinatesAfterCleanup(mode: ScanKind, coordinates: SelectionCoordinates): void {
-  void waitForOverlayToClear().then(() => chrome.runtime.sendMessage({
+  void waitForOverlayToClear().then(() => sendRuntimeMessage({
     action: 'captureArea',
     mode,
     coordinates

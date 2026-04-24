@@ -9,11 +9,12 @@ const TESSERACT_DIST_DIR = path.resolve(ROOT_DIR, 'node_modules', 'tesseract.js'
 const TESSERACT_CORE_DIR = path.resolve(ROOT_DIR, 'node_modules', 'tesseract.js-core');
 
 export const EXTENSION_ENTRIES = [
-  { name: 'background', entry: 'src/background.ts', fileName: 'background.js', globalName: 'ChatGptChromeHelperBackground' },
-  { name: 'content', entry: 'src/content.ts', fileName: 'content.js', globalName: 'ChatGptChromeHelperContent' },
-  { name: 'popup', entry: 'src/popup.ts', fileName: 'popup.js', globalName: 'ChatGptChromeHelperPopup' },
-  { name: 'selectionOverlay', entry: 'src/selectionOverlay.ts', fileName: 'selectionOverlay.js', globalName: 'ChatGptChromeHelperSelectionOverlay' },
-  { name: 'imageSelectionOverlay', entry: 'src/imageSelectionOverlay.ts', fileName: 'imageSelectionOverlay.js', globalName: 'ChatGptChromeHelperImageSelectionOverlay' }
+  { name: 'background', entry: 'src/background/index.ts', fileName: 'background.js', globalName: 'ChatGptChromeHelperBackground' },
+  { name: 'content', entry: 'src/content/index.ts', fileName: 'content.js', globalName: 'ChatGptChromeHelperContent' },
+  { name: 'popup', entry: 'src/popup/index.ts', fileName: 'popup.js', globalName: 'ChatGptChromeHelperPopup' },
+  { name: 'options', entry: 'src/options/index.ts', fileName: 'options.js', globalName: 'ChatGptChromeHelperOptions' },
+  { name: 'selectionOverlay', entry: 'src/content/overlays/textSelectionEntry.ts', fileName: 'selectionOverlay.js', globalName: 'ChatGptChromeHelperSelectionOverlay' },
+  { name: 'imageSelectionOverlay', entry: 'src/content/overlays/imageSelectionEntry.ts', fileName: 'imageSelectionOverlay.js', globalName: 'ChatGptChromeHelperImageSelectionOverlay' }
 ];
 
 async function copyFileTask(from, to, options = {}) {
@@ -49,10 +50,11 @@ async function copyMatchingFiles(fromDir, toDir, predicate) {
 
 async function copyStaticAssets() {
   await Promise.all([
-    copyFileTask('src/manifest.json', 'manifest.json'),
-    copyFileTask('src/popup.html', 'popup.html'),
-    copyFileTask('src/styles.css', 'styles.css'),
-    copyFileTask('src/chatgpt-icon.png', 'chatgpt-icon.png'),
+    copyFileTask('public/manifest.json', 'manifest.json'),
+    copyFileTask('public/popup.html', 'popup.html'),
+    copyFileTask('public/options.html', 'options.html'),
+    copyFileTask('public/styles.css', 'styles.css'),
+    copyFileTask('public/icons/chatgpt-icon.png', 'icons/chatgpt-icon.png'),
     copyFileTask(
       path.join('node_modules', 'tesseract.js', 'dist', 'worker.min.js'),
       path.join('assets', 'tesseract', 'worker.min.js'),

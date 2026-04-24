@@ -1,8 +1,8 @@
 /** Handles ChatGPT auth tokens, response calls, and usage limit normalization. */
-import { DEFAULT_MODEL, TEXT_SOLVER_PROMPT } from '../lib/shared';
-import { broadcastRuntimeMessage } from '../lib/messages';
-import { getStorage, setStorage } from '../lib/storage';
-import { asRecord } from '../lib/safe';
+import { DEFAULT_MODEL, TEXT_SOLVER_PROMPT } from '../common/scanSettings';
+import { broadcastRuntimeMessage } from '../common/messages';
+import { getStorage, setStorage } from '../common/storage';
+import { asRecord } from '../common/safe';
 import type {
   AccessContext,
   AvailableModel,
@@ -13,7 +13,7 @@ import type {
   ResponseStyle,
   StoredLimitInfo,
   TokenResult
-} from '../lib/types';
+} from '../common/types';
 
 export const CHATGPT_AUTH_URL = 'https://auth.openai.com/oauth/authorize';
 const CHATGPT_TOKEN_URL = 'https://auth.openai.com/oauth/token';
