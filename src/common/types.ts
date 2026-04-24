@@ -304,6 +304,7 @@ export type TabMessage = DisplayResponseMessage | CropImageMessage | OcrImageMes
 export interface PopupElements {
   signedOutView: HTMLElement;
   signedInView: HTMLElement;
+  appVersion: HTMLElement;
   accountLabel: HTMLElement;
   planLabel: HTMLElement;
   limitList: HTMLElement;

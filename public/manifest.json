@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "ChatGPT Chrome Helper",
   "description": "ChatGPT Chrome Helper is a Chrome extension for working with ChatGPT directly from your browser. It can answer selected text, scan page text with automatic OCR, and analyze selected image areas.",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "icons": {
     "16": "icons/chatgpt-icon.png",
     "32": "icons/chatgpt-icon.png",

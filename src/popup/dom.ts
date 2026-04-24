@@ -6,6 +6,7 @@ export function getElements(): PopupElements {
   return {
     signedOutView: getElement('signedOutView'),
     signedInView: getElement('signedInView'),
+    appVersion: getElement('appVersion'),
     accountLabel: getElement('accountLabel'),
     planLabel: getElement('planLabel'),
     limitList: getElement('limitList'),

@@ -39,8 +39,15 @@ function handlePopupRuntimeMessage(incoming: unknown): boolean {
 
 /** Binds popup events and loads the initial extension status. */
 function initializePopup(): void {
+  renderAppVersion();
   bindEvents();
   void refreshStatus();
+}
+
+/** Shows the installed extension version next to the popup title. */
+function renderAppVersion(): void {
+  const version = chrome.runtime.getManifest().version;
+  elements.appVersion.textContent = version ? `v${version}` : '';
 }
 
 /** Responds to runtime events that should refresh popup state. */
