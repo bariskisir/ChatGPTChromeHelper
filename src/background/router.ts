@@ -6,7 +6,7 @@ import { createContextMenus } from './menus';
 import { startLogin, signOut } from '../services/auth';
 import { captureArea, repeatSavedScan, triggerActiveOverlay } from '../services/scan';
 import { deleteHistory } from '../services/history';
-import { getStatus, refreshModels } from '../services/status';
+import { getStatus, refreshLimits, refreshModels } from '../services/status';
 
 /** Validates incoming runtime messages and replies asynchronously with typed results. */
 export function handleRuntimeMessage(
@@ -35,6 +35,8 @@ function dispatchRuntimeMessage(message: RuntimeRequest, sender: chrome.runtime.
       return deleteHistory();
     case 'refreshModels':
       return refreshModels();
+    case 'refreshLimits':
+      return refreshLimits();
     case 'triggerTextScan':
       return triggerActiveOverlay('text');
     case 'triggerImageScan':

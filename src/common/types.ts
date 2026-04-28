@@ -148,8 +148,8 @@ export interface ExtensionStorage {
   lastResponse?: string;
   history?: HistoryEntry[];
   historyIndex?: number;
-  requestCount?: number;
   limitInfo?: StoredLimitInfo;
+  limitInfoUpdatedAt?: number;
   availableModels?: AvailableModel[];
   codexClientVersion?: string;
   lastTextScanCoordinates?: SavedSelectionCoordinates;
@@ -194,8 +194,8 @@ export interface StatusPayload {
   ok: true;
   loggedIn: boolean;
   accountEmail: string;
-  requestCount: number;
   limitInfo: LimitInfo | null;
+  limitInfoUpdatedAt: number | null;
   availableModels: AvailableModel[];
   codexClientVersion: string;
   expiresAt: number | null;
@@ -235,6 +235,10 @@ export interface RefreshModelsRequest {
   action: 'refreshModels';
 }
 
+export interface RefreshLimitsRequest {
+  action: 'refreshLimits';
+}
+
 export interface TriggerTextScanRequest {
   action: 'triggerTextScan';
 }
@@ -263,6 +267,7 @@ export type RuntimeRequest =
   | GetStatusRequest
   | DeleteHistoryRequest
   | RefreshModelsRequest
+  | RefreshLimitsRequest
   | TriggerTextScanRequest
   | TriggerImageScanRequest
   | RepeatTextScanRequest
@@ -308,6 +313,7 @@ export interface PopupElements {
   accountLabel: HTMLElement;
   planLabel: HTMLElement;
   limitList: HTMLElement;
+  limitRefreshButton: HTMLButtonElement;
   authError: HTMLElement;
   historyOutput: HTMLElement;
   historyInputImage: HTMLImageElement;

@@ -10,6 +10,7 @@ export function getElements(): PopupElements {
     accountLabel: getElement('accountLabel'),
     planLabel: getElement('planLabel'),
     limitList: getElement('limitList'),
+    limitRefreshButton: getElement('limitRefreshButton'),
     authError: getElement('authError'),
     historyOutput: getElement('historyOutput'),
     historyInputImage: getElement('historyInputImage'),

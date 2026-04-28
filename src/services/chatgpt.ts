@@ -6,7 +6,6 @@ import { asRecord } from '../common/safe';
 import type {
   AccessContext,
   AvailableModel,
-  ExtensionStorage,
   LimitInfo,
   LimitInfoItem,
   ThinkingVariant,
@@ -26,7 +25,7 @@ export const CHATGPT_REDIRECT_URI = 'http://localhost:1455/auth/callback';
 const CHATGPT_SCOPE = 'openid profile email offline_access';
 const DEFAULT_CODEX_CLIENT_VERSION = '0.124.0';
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
-const LIMIT_REFRESH_INTERVAL = 5;
+const LIMIT_REFRESH_MAX_AGE_MS = 5 * 60 * 1000;
 const LIMIT_PERCENT_PRECISION = 1;
 const DEFAULT_LIMIT_ID = 'codex';
 
@@ -208,11 +207,21 @@ export async function callChatGpt({
 /** Refreshes stored limit data while falling back to the previous cached snapshot on failure. */
 export async function refreshStoredLimitInfo(accessContext: AccessContext): Promise<StoredLimitInfo> {
   try {
-    return await fetchLimitInfo(accessContext);
+    return await fetchAndStoreLimitInfo(accessContext);
   } catch (error) {
     console.warn('Unable to refresh ChatGPT limit info.', error);
     return (await getStorage(['limitInfo'] as const)).limitInfo || null;
   }
+}
+
+/** Fetches and stores the current usage limits plus their refresh timestamp. */
+export async function fetchAndStoreLimitInfo(accessContext: AccessContext): Promise<LimitInfo> {
+  const limitInfo = await fetchLimitInfo(accessContext);
+  await setStorage({
+    limitInfo,
+    limitInfoUpdatedAt: Date.now()
+  });
+  return limitInfo;
 }
 
 /** Calls the ChatGPT usage endpoint and converts the response into popup-friendly limit info. */
@@ -374,19 +383,16 @@ async function finalizeChatGptResponse(textOrPromise: Promise<string> | string, 
   return text;
 }
 
-/** Increments request counters and periodically refreshes stored rate-limit info. */
+/** Increments request counters and refreshes stale stored rate-limit info. */
 async function maybeRefreshLimitInfo(accessContext: AccessContext): Promise<void> {
-  const { requestCount = 0 } = await getStorage(['requestCount'] as const);
-  const nextCount = Number.isInteger(requestCount) ? requestCount + 1 : 1;
-  const shouldRefresh = nextCount === 1 || nextCount % LIMIT_REFRESH_INTERVAL === 0;
-  const values: Partial<ExtensionStorage> = { requestCount: nextCount };
+  const { limitInfoUpdatedAt = 0 } = await getStorage(['limitInfoUpdatedAt'] as const);
+  const lastUpdatedAt = typeof limitInfoUpdatedAt === 'number' && Number.isFinite(limitInfoUpdatedAt)
+    ? limitInfoUpdatedAt
+    : 0;
+  const shouldRefresh = Date.now() - lastUpdatedAt >= LIMIT_REFRESH_MAX_AGE_MS;
 
   if (shouldRefresh) {
-    values.limitInfo = await refreshStoredLimitInfo(accessContext);
-  }
-
-  await setStorage(values);
-  if (shouldRefresh) {
+    await refreshStoredLimitInfo(accessContext);
     broadcastRuntimeMessage({ action: 'responseUpdated' });
   }
 }

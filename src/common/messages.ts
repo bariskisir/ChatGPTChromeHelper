@@ -23,6 +23,7 @@ export interface RuntimeResponseByAction {
   getStatus: StatusPayload | ErrorResult;
   deleteHistory: Result;
   refreshModels: Result;
+  refreshLimits: Result;
   triggerTextScan: Result;
   triggerImageScan: Result;
   repeatTextScan: Result;
@@ -52,6 +53,7 @@ export function isRuntimeRequest(value: unknown): value is RuntimeRequest {
     case 'getStatus':
     case 'deleteHistory':
     case 'refreshModels':
+    case 'refreshLimits':
     case 'triggerTextScan':
     case 'triggerImageScan':
     case 'repeatTextScan':

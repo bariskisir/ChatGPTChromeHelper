@@ -15,6 +15,7 @@ import { bindScanControls, createScanControls, renderScanControls } from './scan
 import { renderSession } from './sessionView';
 import type { RuntimeEventMessage } from '../common/types';
 
+const REFRESH_ICON = '\u21BB';
 const elements = getElements();
 const historyState = createHistoryState();
 const scanControls = createScanControls(elements);
@@ -66,6 +67,9 @@ function bindEvents(): void {
   elements.historyPrev.addEventListener('click', () => moveHistory(elements, historyState, -1));
   elements.historyNext.addEventListener('click', () => moveHistory(elements, historyState, 1));
   elements.deleteHistoryButton.addEventListener('click', handleDeleteHistoryClick);
+  elements.limitRefreshButton.addEventListener('click', () => {
+    void handleRefreshLimitsClick();
+  });
   elements.copyInputButton.addEventListener('click', () => {
     void copyHistoryField(historyState, 'input', elements.copyInputButton, showError);
   });
@@ -103,6 +107,22 @@ async function handleSignOutClick(): Promise<void> {
 
   showError('');
   await refreshStatus();
+}
+
+/** Refreshes usage limits from the popup header refresh button. */
+async function handleRefreshLimitsClick(): Promise<void> {
+  setBusy(elements.limitRefreshButton, true, REFRESH_ICON);
+  try {
+    const result = await sendRuntimeMessage({ action: 'refreshLimits' });
+    if (!result.ok) {
+      showError(result.error || 'Could not refresh limits.');
+      return;
+    }
+
+    await refreshStatus();
+  } finally {
+    setBusy(elements.limitRefreshButton, false, REFRESH_ICON);
+  }
 }
 
 /** Clears stored history and resets the popup history viewer. */

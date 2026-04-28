@@ -15,8 +15,8 @@ import { broadcastRuntimeMessage } from '../common/messages';
 import { getStorage, setStorage } from '../common/storage';
 import {
   fetchAvailableModels,
+  fetchAndStoreLimitInfo,
   fetchCodexClientVersion,
-  fetchLimitInfo,
   getDefaultCodexClientVersion,
   getValidAccessContext,
   hasRenderableLimitInfo,
@@ -50,11 +50,11 @@ export async function getStatus(): Promise<StatusPayload> {
 
   if ((data.accessToken || data.refreshToken) && !hasRenderableLimitInfo(normalizedLimitInfo)) {
     try {
-      const refreshedLimitInfo = await fetchLimitInfo(await getValidAccessContext());
-      await setStorage({ limitInfo: refreshedLimitInfo });
+      const refreshedLimitInfo = await fetchAndStoreLimitInfo(await getValidAccessContext());
       data = {
         ...data,
-        limitInfo: refreshedLimitInfo
+        limitInfo: refreshedLimitInfo,
+        limitInfoUpdatedAt: Date.now()
       };
       normalizedLimitInfo = normalizeLimitInfo(refreshedLimitInfo);
     } catch (error) {
@@ -81,8 +81,10 @@ export async function getStatus(): Promise<StatusPayload> {
     ok: true,
     loggedIn: Boolean(data.accessToken || data.refreshToken),
     accountEmail: data.accountEmail || '',
-    requestCount: typeof data.requestCount === 'number' && Number.isInteger(data.requestCount) ? data.requestCount : 0,
     limitInfo: normalizedLimitInfo,
+    limitInfoUpdatedAt: typeof data.limitInfoUpdatedAt === 'number' && Number.isFinite(data.limitInfoUpdatedAt)
+      ? data.limitInfoUpdatedAt
+      : null,
     availableModels,
     codexClientVersion,
     expiresAt: data.expiresAt || null,
@@ -101,6 +103,13 @@ export async function getStatus(): Promise<StatusPayload> {
     imageCustomSystemPrompt: data.imageCustomSystemPrompt || '',
     authError: data.authError || ''
   };
+}
+
+/** Refreshes the current usage limits on demand for the popup refresh button. */
+export async function refreshLimits(): Promise<Result> {
+  await fetchAndStoreLimitInfo(await getValidAccessContext());
+  broadcastRuntimeMessage({ action: 'responseUpdated' });
+  return { ok: true };
 }
 
 /** Refreshes the remote model catalog on demand for the popup refresh buttons. */

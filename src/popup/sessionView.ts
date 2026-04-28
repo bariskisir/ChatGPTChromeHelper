@@ -11,6 +11,7 @@ export function renderSession(elements: PopupElements, status: StatusPayload): v
     : 'Not signed in';
   renderPlanLabel(elements, loggedIn ? status.limitInfo?.planName || '' : '');
   renderLimitInfo(elements, loggedIn ? status.limitInfo : null);
+  elements.limitRefreshButton.hidden = !loggedIn;
 }
 
 /** Shows the current subscription plan label when available. */
