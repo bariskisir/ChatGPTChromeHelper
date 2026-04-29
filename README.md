@@ -2,7 +2,7 @@
 
 ChatGPT Chrome Helper is a Chrome extension for working with ChatGPT directly from your browser. It can answer selected text, scan page text with local OCR, and analyze selected image areas.
 
-<img src="images/interface.png" alt="ChatGPT Chrome Helper interface">
+<img src="images/interface.png" alt="ChatGPT Chrome Helper interface" width="60%">
 
 ---
 
