@@ -23,7 +23,8 @@ import type {
   Result,
   SavedSelectionCoordinates,
   ScanKind,
-  SelectionCoordinates
+  SelectionCoordinates,
+  SubmitManualInputRequest
 } from '../common/types';
 
 const RESPONSE_BADGE_COLOR = '#2563eb';
@@ -32,7 +33,7 @@ const RESPONSE_BADGE_DURATION_MS = 8000;
 const ASK_RESPONSE_STYLE = 'low';
 
 interface RequestAndPublishOptions {
-  tabId: number;
+  tabId?: number | null;
   prompt: string;
   imageDataUrl?: string | null;
   kind?: ScanKind;
@@ -138,6 +139,32 @@ export async function triggerActiveOverlay(kind: ScanKind): Promise<Result> {
 
   await ensureAuthenticated();
   await injectOverlay(tab.id, kind);
+  return { ok: true };
+}
+
+/** Sends text or pasted image input from the popup to ChatGPT without requiring an active tab. */
+export async function submitManualInput(message: SubmitManualInputRequest): Promise<Result> {
+  await ensureAuthenticated();
+  const text = String(message.text || '').trim();
+  const imageDataUrl = String(message.imageDataUrl || '').trim();
+  const kind: ScanKind = imageDataUrl ? 'image' : 'text';
+
+  if (!text && !imageDataUrl) {
+    throw new Error('Enter text or add an image first.');
+  }
+
+  await requestAndPublishResponse({
+    tabId: null,
+    prompt: imageDataUrl ? text || '.' : text,
+    imageDataUrl: imageDataUrl || null,
+    kind,
+    historyType: kind,
+    historyInput: text,
+    historyImageDataUrl: imageDataUrl,
+    responseStyle: getScanSettings(kind).responseStyle,
+    statusMessage: ''
+  });
+
   return { ok: true };
 }
 
@@ -248,7 +275,7 @@ async function requestAndPublishResponse({
   statusMessage = 'Thinking...',
   responseStyle = 'medium'
 }: RequestAndPublishOptions): Promise<string> {
-  if (statusMessage) {
+  if (statusMessage && tabId != null) {
     await sendPageResponse(tabId, statusMessage, 'status');
   }
 
@@ -271,7 +298,7 @@ async function requestAndPublishResponse({
 
 /** Stores an answer, pushes it into history, notifies the popup, and shows it on the page. */
 async function publishResponse(
-  tabId: number,
+  tabId: number | null | undefined,
   response: string,
   type: PageResponseType,
   input = '',
@@ -280,7 +307,9 @@ async function publishResponse(
   await setStorage({ lastResponse: response });
   await addHistoryEntry(input, response, type === 'error' || type === 'status' ? 'ask' : type, inputImageDataUrl);
   broadcastRuntimeMessage({ action: 'responseUpdated', response });
-  await sendPageResponse(tabId, response, type);
+  if (tabId != null) {
+    await sendPageResponse(tabId, response, type);
+  }
   showActionBadge();
 }
 

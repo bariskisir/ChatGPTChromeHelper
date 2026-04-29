@@ -261,6 +261,12 @@ export interface CaptureAreaRequest {
   coordinates: SelectionCoordinates;
 }
 
+export interface SubmitManualInputRequest {
+  action: 'submitManualInput';
+  text: string;
+  imageDataUrl?: string;
+}
+
 export type RuntimeRequest =
   | StartLoginRequest
   | SignOutRequest
@@ -272,7 +278,8 @@ export type RuntimeRequest =
   | TriggerImageScanRequest
   | RepeatTextScanRequest
   | RepeatImageScanRequest
-  | CaptureAreaRequest;
+  | CaptureAreaRequest
+  | SubmitManualInputRequest;
 
 export interface AuthChangedEvent {
   action: 'authChanged';
@@ -316,14 +323,22 @@ export interface PopupElements {
   limitRefreshButton: HTMLButtonElement;
   authError: HTMLElement;
   historyOutput: HTMLElement;
+  historyInput: HTMLElement;
   historyInputImage: HTMLImageElement;
   historyInputText: HTMLElement;
   historyCounter: HTMLElement;
   historyPrev: HTMLButtonElement;
   historyNext: HTMLButtonElement;
+  addManualButton: HTMLButtonElement;
+  cancelManualButton: HTMLButtonElement;
   deleteHistoryButton: HTMLButtonElement;
   copyInputButton: HTMLButtonElement;
   copyOutputButton: HTMLButtonElement;
+  manualInputText: HTMLTextAreaElement;
+  manualActionRow: HTMLElement;
+  manualActionSendButton: HTMLButtonElement;
+  textScanButtonWrap: HTMLElement;
+  imageScanButtonWrap: HTMLElement;
   loginButton: HTMLButtonElement;
   signOutButton: HTMLButtonElement;
   developerLink: HTMLButtonElement;

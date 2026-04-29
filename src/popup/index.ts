@@ -11,6 +11,7 @@ import {
   renderHistory,
   syncHistoryState
 } from './historyView';
+import { bindManualInput } from './manualInput';
 import { bindScanControls, createScanControls, renderScanControls } from './scanControls';
 import { renderSession } from './sessionView';
 import type { RuntimeEventMessage } from '../common/types';
@@ -76,6 +77,7 @@ function bindEvents(): void {
   elements.copyOutputButton.addEventListener('click', () => {
     void copyHistoryField(historyState, 'output', elements.copyOutputButton, showError);
   });
+  bindManualInput(elements, historyState, showError, refreshStatus);
   bindScanControls(scanControls, showError, refreshStatus);
 }
 

@@ -4,7 +4,7 @@ import { toErrorResult } from '../common/safe';
 import type { RuntimeRequest } from '../common/types';
 import { createContextMenus } from './menus';
 import { startLogin, signOut } from '../services/auth';
-import { captureArea, repeatSavedScan, triggerActiveOverlay } from '../services/scan';
+import { captureArea, repeatSavedScan, submitManualInput, triggerActiveOverlay } from '../services/scan';
 import { deleteHistory } from '../services/history';
 import { getStatus, refreshLimits, refreshModels } from '../services/status';
 
@@ -47,6 +47,8 @@ function dispatchRuntimeMessage(message: RuntimeRequest, sender: chrome.runtime.
       return repeatSavedScan('image', sender);
     case 'captureArea':
       return captureArea(message, sender);
+    case 'submitManualInput':
+      return submitManualInput(message);
     default:
       return { ok: false, error: 'Unsupported runtime action.' };
   }

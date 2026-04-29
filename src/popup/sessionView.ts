@@ -6,6 +6,7 @@ export function renderSession(elements: PopupElements, status: StatusPayload): v
   const loggedIn = Boolean(status.loggedIn);
   elements.signedOutView.hidden = loggedIn;
   elements.signedInView.hidden = !loggedIn;
+  elements.signOutButton.hidden = !loggedIn;
   elements.accountLabel.textContent = loggedIn
     ? status.accountEmail || 'Signed in to ChatGPT'
     : 'Not signed in';

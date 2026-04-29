@@ -11,6 +11,7 @@ import type {
   RuntimeEventMessage,
   RuntimeRequest,
   StatusPayload,
+  SubmitManualInputRequest,
   TabMessage
 } from './types';
 
@@ -29,6 +30,7 @@ export interface RuntimeResponseByAction {
   repeatTextScan: Result;
   repeatImageScan: Result;
   captureArea: Result;
+  submitManualInput: Result;
 }
 
 export interface TabResponseByAction {
@@ -61,6 +63,8 @@ export function isRuntimeRequest(value: unknown): value is RuntimeRequest {
       return true;
     case 'captureArea':
       return isCaptureAreaRequest(candidate);
+    case 'submitManualInput':
+      return isSubmitManualInputRequest(candidate);
     default:
       return false;
   }
@@ -135,6 +139,13 @@ function isCaptureAreaRequest(value: unknown): value is CaptureAreaRequest {
     && isSelectionCoordinates(candidate.coordinates);
 }
 
+/** Validates manual text/image input submitted from the popup. */
+function isSubmitManualInputRequest(value: unknown): value is SubmitManualInputRequest {
+  const candidate = toLooseRecord(value);
+  return typeof candidate.text === 'string'
+    && (candidate.imageDataUrl == null || isImageDataUrl(candidate.imageDataUrl));
+}
+
 /** Validates a display response message sent from the background script. */
 function isDisplayResponseMessage(value: unknown): value is DisplayResponseMessage {
   const candidate = toLooseRecord(value);
@@ -152,6 +163,11 @@ function isDisplayResponseMessage(value: unknown): value is DisplayResponseMessa
 function isImageWorkMessage(value: unknown): value is CropImageMessage | OcrImageMessage {
   const candidate = toLooseRecord(value);
   return typeof candidate.imageUri === 'string' && isSelectionCoordinates(candidate.coordinates);
+}
+
+/** Checks for image data URLs generated from pasted or selected files. */
+function isImageDataUrl(value: unknown): value is string {
+  return typeof value === 'string' && value.startsWith('data:image/');
 }
 
 /** Validates page selection coordinates used by capture and image-processing flows. */

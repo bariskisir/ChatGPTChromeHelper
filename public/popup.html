@@ -13,7 +13,10 @@
           <img class="brand-mark-image" src="icons/chatgpt-icon.png" alt="">
         </div>
         <div class="header-copy">
-          <h1>ChatGPT Chrome Helper <span id="appVersion" class="app-version"></span></h1>
+          <div class="title-row">
+            <h1>ChatGPT Chrome Helper <span id="appVersion" class="app-version"></span></h1>
+            <button id="signOutButton" class="history-sign-out-button header-sign-out-button" type="button" hidden>Sign out</button>
+          </div>
           <div class="account-row">
             <div class="account-meta">
               <p id="accountLabel">Not signed in</p>
@@ -44,10 +47,11 @@
               <div id="historyCounter" class="history-counter">0 / 0</div>
             </div>
             <button id="historyNext" class="history-button" type="button" aria-label="Next history item">&gt;</button>
+            <button id="addManualButton" class="add-history-button" type="button" aria-label="New manual input" title="New manual input">+</button>
+            <button id="cancelManualButton" class="cancel-history-button" type="button" aria-label="Cancel manual input" title="Cancel manual input" disabled>-</button>
             <button id="deleteHistoryButton" class="delete-history-button" type="button" aria-label="Delete history" title="Delete history">
               <span aria-hidden="true">&#128465;</span>
             </button>
-            <button id="signOutButton" class="history-sign-out-button" type="button">Sign out</button>
           </div>
           <div class="history-grid">
             <div class="history-column">
@@ -55,7 +59,7 @@
                 <div class="history-label">Input</div>
                 <button id="copyInputButton" class="copy-button" type="button" aria-label="Copy input" title="Copy input">Copy</button>
               </div>
-              <div id="historyInput" class="history-box"><img id="historyInputImage" class="history-image" alt="" hidden><span id="historyInputText">No history yet.</span></div>
+              <div id="historyInput" class="history-box"><img id="historyInputImage" class="history-image" alt="" hidden><span id="historyInputText">No history yet.</span><textarea id="manualInputText" class="manual-history-input" placeholder="Enter text or paste image" hidden></textarea></div>
             </div>
             <div class="history-column">
               <div class="history-label-row">
@@ -67,39 +71,41 @@
           </div>
         </div>
 
+        <div id="manualActionRow" class="manual-action-row" hidden>
+          <button id="manualActionSendButton" class="manual-action-send-button" type="button">Send Text</button>
+        </div>
+
         <div class="action-grid">
           <div class="scan-control">
-            <button id="textScanButton" class="primary-button" type="button">
-              <span class="button-copy">
-                <span class="button-label">Scan Text</span>
-                <small>Shift+T | Repeat: Num 1</small>
-              </span>
-            </button>
-            <div class="control-label-row">
-              <label class="model-label" for="textModelSelect">Text model</label>
-              <button id="textModelRefreshButton" class="icon-button" type="button" aria-label="Refresh text models" title="Refresh models">↻</button>
+            <div id="textScanButtonWrap">
+              <button id="textScanButton" class="primary-button" type="button">
+                <span class="button-copy">
+                  <span class="button-label">Scan Text</span>
+                  <small>Shift+T | Repeat: Num 1</small>
+                </span>
+              </button>
             </div>
-            <div class="model-row">
+            <div class="control-label-row">
               <select id="textModelSelect" class="model-select"></select>
               <select id="textThinkingSelect" class="model-select"></select>
+              <button id="textModelRefreshButton" class="icon-button" type="button" aria-label="Refresh text models" title="Refresh models">↻</button>
             </div>
             <input id="textCustomModel" class="model-input" type="text" placeholder="Enter text scan model" hidden>
           </div>
 
           <div class="scan-control">
-            <button id="imageScanButton" class="secondary-button" type="button">
-              <span class="button-copy">
-                <span class="button-label">Scan Image</span>
-                <small>Shift+I | Repeat: Num 2</small>
-              </span>
-            </button>
-            <div class="control-label-row">
-              <label class="model-label" for="imageModelSelect">Image model</label>
-              <button id="imageModelRefreshButton" class="icon-button" type="button" aria-label="Refresh image models" title="Refresh models">↻</button>
+            <div id="imageScanButtonWrap">
+              <button id="imageScanButton" class="secondary-button" type="button">
+                <span class="button-copy">
+                  <span class="button-label">Scan Image</span>
+                  <small>Shift+I | Repeat: Num 2</small>
+                </span>
+              </button>
             </div>
-            <div class="model-row">
+            <div class="control-label-row">
               <select id="imageModelSelect" class="model-select"></select>
               <select id="imageThinkingSelect" class="model-select"></select>
+              <button id="imageModelRefreshButton" class="icon-button" type="button" aria-label="Refresh image models" title="Refresh models">↻</button>
             </div>
             <input id="imageCustomModel" class="model-input" type="text" placeholder="Enter image scan model" hidden>
           </div>
@@ -108,21 +114,25 @@
         <div class="prompt-settings">
           <div class="prompt-grid">
             <div class="prompt-control">
-              <label class="model-label" for="textSystemPromptSelect">Text system prompt</label>
-              <select id="textSystemPromptSelect" class="model-select">
-                <option value="solver">Solver</option>
-                <option value="none">None</option>
-                <option value="other">Other</option>
-              </select>
+              <div class="prompt-label-row">
+                <label class="model-label" for="textSystemPromptSelect">System prompt</label>
+                <select id="textSystemPromptSelect" class="model-select">
+                  <option value="solver">Solver</option>
+                  <option value="none">None</option>
+                  <option value="other">Other</option>
+                </select>
+              </div>
               <textarea id="textCustomSystemPrompt" class="prompt-input" placeholder="Enter text scan system prompt"></textarea>
             </div>
             <div class="prompt-control">
-              <label class="model-label" for="imageSystemPromptSelect">Image system prompt</label>
-              <select id="imageSystemPromptSelect" class="model-select">
-                <option value="solver">Solver</option>
-                <option value="none">None</option>
-                <option value="other">Other</option>
-              </select>
+              <div class="prompt-label-row">
+                <label class="model-label" for="imageSystemPromptSelect">System prompt</label>
+                <select id="imageSystemPromptSelect" class="model-select">
+                  <option value="solver">Solver</option>
+                  <option value="none">None</option>
+                  <option value="other">Other</option>
+                </select>
+              </div>
               <textarea id="imageCustomSystemPrompt" class="prompt-input" placeholder="Enter image scan system prompt"></textarea>
             </div>
           </div>
